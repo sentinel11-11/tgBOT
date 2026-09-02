@@ -1,6 +1,11 @@
 # Ядро бота (long polling, ConversationHandler, JobQueue)
 python-telegram-bot[socks]==21.6
 
+# httpx приходит зависимостью python-telegram-bot. Диапазон зафиксирован
+# по реально проверенным версиям: на 0.27.x и 0.28.1 весь набор тестов зелёный.
+# Верхняя граница — чтобы будущий 0.29 не сломал PTB 21.6 незаметно.
+httpx>=0.27,<0.29
+
 # Конфигурация
 PyYAML==6.0.2
 python-dotenv==1.0.1
