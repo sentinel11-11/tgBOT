@@ -146,11 +146,12 @@ async def check_sheets(config: Config) -> bool:
     print(f"  таблица: {config.sheets.spreadsheet_id}, лист: «{config.sheets.worksheet}»")
     print(f"  колонки: {', '.join(exporter.header())}")
 
+    email = exporter.account_email()
+    if email:
+        print(f"  аккаунт: {email}")
+
     if not await exporter.check_connection():
-        print(f"{FAIL} подключиться не удалось. Частые причины:")
-        print("       • сервисному аккаунту не выдан доступ к таблице (роль «Редактор»);")
-        print("       • не включены Google Sheets API и Google Drive API в проекте;")
-        print("       • неверный spreadsheet_id (часть URL между /d/ и /edit).")
+        print(f"{FAIL} {exporter.last_error}")
         return False
 
     demo = {step.key: "тест" for step in config.survey if step.in_summary}
@@ -158,7 +159,7 @@ async def check_sheets(config: Config) -> bool:
         answers=demo, username="@test", user_id=0,
         status="ТЕСТ (можно удалить)", created_at=datetime.now(),
     ):
-        print(f"{FAIL} подключение есть, но записать строку не удалось")
+        print(f"{FAIL} подключение есть, но записать строку не удалось: {exporter.last_error}")
         return False
 
     print(f"{OK} тестовая строка добавлена в таблицу (удалите её вручную)")

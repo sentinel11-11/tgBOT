@@ -131,3 +131,97 @@ async def test_sheets_error_is_swallowed(config, monkeypatch, caplog):
     result = await exporter.append(answers=ANSWERS, username="@ivanov", user_id=42)
     assert result is False
     assert "Google Sheets" in caplog.text
+
+
+# --------------------------------------------------------------------------- #
+#  Ошибки Google API: временные повторяем, постоянные объясняем
+# --------------------------------------------------------------------------- #
+
+class FakeResponse:
+    def __init__(self, status_code): self.status_code = status_code
+
+
+class FakeAPIError(Exception):
+    """Имитация gspread.exceptions.APIError."""
+    def __init__(self, status, message=""):
+        super().__init__(f"APIError: [{status}]: {message}")
+        self.response = FakeResponse(status)
+
+
+def test_error_status_from_response_and_text():
+    from bot.sheets import error_status
+
+    assert error_status(FakeAPIError(503)) == 503
+    assert error_status(Exception("APIError: [403]: forbidden")) == 403
+    assert error_status(Exception("совсем другая ошибка")) is None
+
+
+@pytest.mark.parametrize("status,transient", [(503, True), (429, True), (500, True),
+                                              (403, False), (404, False)])
+def test_transient_classification(status, transient):
+    from bot.sheets import is_transient
+
+    assert is_transient(FakeAPIError(status)) is transient
+
+
+def test_explain_503_does_not_blame_permissions():
+    """503 — сбой Google, а не права доступа (реальный случай при настройке)."""
+    from bot.sheets import explain
+
+    message = explain(FakeAPIError(503, "The service is currently unavailable."))
+    assert "временный сбой" in message.lower()
+    assert "доступ" not in message.lower()
+
+
+def test_explain_403_tells_how_to_fix():
+    from bot.sheets import explain
+
+    message = explain(FakeAPIError(403), account_email="bot@project.iam.gserviceaccount.com")
+    assert "bot@project.iam.gserviceaccount.com" in message
+    assert "Редактор" in message
+
+
+def test_explain_404_mentions_spreadsheet_id():
+    from bot.sheets import explain
+
+    assert "GOOGLE_SPREADSHEET_ID" in explain(FakeAPIError(404), spreadsheet_id="abc123")
+
+
+async def test_append_retries_transient_error(config, monkeypatch):
+    """Первые две попытки — 503, третья успешна: строка должна записаться."""
+    config.sheets.enabled = True
+    config.sheets.spreadsheet_id = "fake"
+    exporter = SheetsExporter(config.sheets, config.survey)
+    exporter.retry_delay = 0  # без пауз в тесте
+
+    calls = []
+
+    def flaky(row):
+        calls.append(row)
+        if len(calls) < 3:
+            raise FakeAPIError(503, "The service is currently unavailable.")
+
+    monkeypatch.setattr(exporter, "_append_once", flaky)
+
+    assert await exporter.append(answers=ANSWERS, username="@ivanov", user_id=42) is True
+    assert len(calls) == 3
+
+
+async def test_append_does_not_retry_permission_error(config, monkeypatch):
+    """403 повторять бессмысленно — сразу понятное сообщение."""
+    config.sheets.enabled = True
+    config.sheets.spreadsheet_id = "fake"
+    exporter = SheetsExporter(config.sheets, config.survey)
+    exporter.retry_delay = 0
+
+    calls = []
+
+    def forbidden(row):
+        calls.append(row)
+        raise FakeAPIError(403, "The caller does not have permission")
+
+    monkeypatch.setattr(exporter, "_append_once", forbidden)
+
+    assert await exporter.append(answers=ANSWERS, username="@ivanov", user_id=42) is False
+    assert len(calls) == 1
+    assert "Редактор" in exporter.last_error

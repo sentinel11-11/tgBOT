@@ -14,11 +14,14 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import re
 import threading
+import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 from .config import SheetsConfig, Step
 
@@ -29,9 +32,68 @@ SCOPES = [
     "https://www.googleapis.com/auth/drive.file",
 ]
 
+# Коды, при которых имеет смысл повторить запрос: Google периодически отдаёт
+# 503 «service is currently unavailable» без всякой вины настроек.
+TRANSIENT_STATUSES = {408, 429, 500, 502, 503, 504}
+_STATUS_RE = re.compile(r"\[(\d{3})\]")
+
+
+def error_status(exc: BaseException) -> int | None:
+    """HTTP-код ошибки Google API, если его удаётся определить."""
+    response = getattr(exc, "response", None)
+    code = getattr(response, "status_code", None)
+    if isinstance(code, int):
+        return code
+    match = _STATUS_RE.search(str(exc))
+    return int(match.group(1)) if match else None
+
+
+def is_transient(exc: BaseException) -> bool:
+    """Временный сбой (стоит повторить) или постоянная проблема настроек?"""
+    if error_status(exc) in TRANSIENT_STATUSES:
+        return True
+    if error_status(exc) is not None:
+        return False
+    text = str(exc).lower()
+    return any(
+        marker in text
+        for marker in ("timed out", "timeout", "connection", "temporarily", "unavailable")
+    )
+
+
+def explain(exc: BaseException, account_email: str = "", spreadsheet_id: str = "") -> str:
+    """Человеческое объяснение ошибки вместо общего списка причин."""
+    status = error_status(exc)
+    if status == 403:
+        who = account_email or "сервисному аккаунту"
+        return (
+            f"нет доступа к таблице. Откройте её для {who} с ролью «Редактор» "
+            "и убедитесь, что в Google Cloud включены Google Sheets API и Google Drive API"
+        )
+    if status == 404:
+        return (
+            f"таблица не найдена (id: {spreadsheet_id or '—'}). "
+            "Проверьте GOOGLE_SPREADSHEET_ID — это часть ссылки между /d/ и /edit"
+        )
+    if status == 429:
+        return "превышен лимит запросов Google API — бот повторит попытку позже"
+    if status in TRANSIENT_STATUSES:
+        return (
+            f"временный сбой на стороне Google (HTTP {status}). "
+            "Настройки ни при чём — попробуйте через минуту"
+        )
+    if isinstance(exc, FileNotFoundError):
+        return str(exc)
+    return str(exc)
+
 
 class SheetsExporter:
     """Дописывает по строке на каждого успешно прошедшего опрос кандидата."""
+
+    #: сколько раз повторять запрос при временных ошибках Google
+    max_attempts = 3
+    #: базовая пауза между попытками (удваивается)
+    retry_delay = 2.0
 
     def __init__(self, config: SheetsConfig, steps: Sequence[Step]) -> None:
         self.config = config
@@ -39,6 +101,37 @@ class SheetsExporter:
         self._worksheet: Any = None
         self._lock = threading.Lock()
         self._failed = False
+        #: последняя ошибка человеческим языком (используется в preflight)
+        self.last_error: str = ""
+
+    # ------------------------------------------------------------------ #
+
+    def account_email(self) -> str:
+        """E-mail сервисного аккаунта из файла ключа — для понятных подсказок."""
+        try:
+            data = json.loads(Path(self.config.credentials_file).read_text(encoding="utf-8"))
+            return str(data.get("client_email", ""))
+        except (OSError, ValueError):
+            return ""
+
+    def _with_retry(self, func: Callable[..., Any], *args: Any) -> Any:
+        """Повторяет запрос при временных ошибках Google (503, 429, таймауты)."""
+        delay = self.retry_delay
+        for attempt in range(1, self.max_attempts + 1):
+            try:
+                return func(*args)
+            except Exception as exc:  # noqa: BLE001
+                if attempt >= self.max_attempts or not is_transient(exc):
+                    raise
+                logger.warning(
+                    "Google Sheets: временная ошибка (%s), повтор %d из %d через %.0f с",
+                    explain(exc, self.account_email(), self.config.spreadsheet_id),
+                    attempt + 1, self.max_attempts, delay,
+                )
+                self._worksheet = None  # переподключимся на следующей попытке
+                time.sleep(delay)
+                delay *= 2
+        raise RuntimeError("недостижимо")
 
     # ------------------------------------------------------------------ #
 
@@ -114,9 +207,12 @@ class SheetsExporter:
             )
             return worksheet
 
-    def _append_sync(self, row: Sequence[str]) -> None:
+    def _append_once(self, row: Sequence[str]) -> None:
         worksheet = self._get_worksheet()
         worksheet.append_row(list(row), value_input_option="USER_ENTERED")
+
+    def _append_sync(self, row: Sequence[str]) -> None:
+        self._with_retry(self._append_once, row)
 
     # ------------------------------------------------------------------ #
 
@@ -148,14 +244,13 @@ class SheetsExporter:
         except Exception as exc:  # noqa: BLE001 — Sheets не должен ронять диалог
             # Сбрасываем клиент: возможно, протух токен — на следующей записи переподключимся.
             self._worksheet = None
-            if not self._failed:
-                logger.error(
-                    "Не удалось выгрузить анкету %s в Google Sheets: %s", user_id, exc,
-                    exc_info=logger.isEnabledFor(logging.DEBUG),
-                )
-                self._failed = True
-            else:
-                logger.error("Google Sheets снова недоступен (%s): %s", user_id, exc)
+            self.last_error = explain(exc, self.account_email(), self.config.spreadsheet_id)
+            logger.error(
+                "Не удалось выгрузить анкету %s в Google Sheets: %s", user_id, self.last_error,
+                exc_info=logger.isEnabledFor(logging.DEBUG),
+            )
+            logger.info("Анкета %s сохранена в базу и отправлена менеджеру", user_id)
+            self._failed = True
             return False
 
     async def check_connection(self) -> bool:
@@ -164,10 +259,12 @@ class SheetsExporter:
             logger.info("Выгрузка в Google Sheets отключена в конфиге")
             return False
         try:
-            await asyncio.to_thread(self._get_worksheet)
+            await asyncio.to_thread(self._with_retry, self._get_worksheet)
+            self.last_error = ""
             return True
         except Exception as exc:  # noqa: BLE001
+            self.last_error = explain(exc, self.account_email(), self.config.spreadsheet_id)
             logger.error(
-                "Google Sheets недоступен на старте (бот продолжит работу): %s", exc
+                "Google Sheets недоступен на старте (бот продолжит работу): %s", self.last_error
             )
             return False

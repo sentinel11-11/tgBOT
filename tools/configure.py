@@ -107,6 +107,7 @@ def main() -> int:
     parser.add_argument("--token", help="токен от @BotFather")
     parser.add_argument("--manager", help="ID чата менеджера")
     parser.add_argument("--sheet", help="ссылка на Google Таблицу или её ID")
+    parser.add_argument("--name", help="имя, которым бот представляется в диалоге")
     parser.add_argument("--no-input", action="store_true", help="ничего не спрашивать")
     args = parser.parse_args()
 
@@ -123,6 +124,18 @@ def main() -> int:
     else:
         print("Не найден config.example.yaml — проект распакован не полностью.", file=sys.stderr)
         return 2
+
+    # --- имя бота в диалоге ------------------------------------------------
+    if args.name:
+        text = CONFIG.read_text(encoding="utf-8")
+        updated, count = re.subn(
+            r'(?m)^(\s*name:\s*)"[^"]*"', lambda m: f'{m.group(1)}"{args.name}"', text, count=1
+        )
+        if count:
+            CONFIG.write_text(updated, encoding="utf-8")
+            print(f"Имя бота в диалоге: {args.name}")
+        else:
+            print("Не нашёл строку 'name:' в config.yaml — задайте имя вручную", file=sys.stderr)
 
     env = read_env()
     interactive = not args.no_input
