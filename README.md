@@ -13,6 +13,7 @@
 ## Содержание
 
 - [Быстрый старт](#быстрый-старт)
+- [Обновление проекта из GitHub](#обновление-проекта-из-github)
 - [Конфигурация](#конфигурация)
 - [Сценарий: как добавить свой вопрос](#сценарий-как-добавить-свой-вопрос)
 - [Google Таблица](#google-таблица)
@@ -74,14 +75,11 @@ python -m bot
 ```powershell
 cd "C:\путь\до\tgBOT"
 
-py -3 -m venv .venv
-.\.venv\Scripts\Activate.ps1          # если ругается на политику выполнения:
-                                       # Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
-pip install -r requirements.txt
+py -m pip install --user -r requirements.txt
 
-py tools\configure.py                  # спросит токен, чат менеджера и ссылку на таблицу
-py tools\preflight.py                  # проверит, что всё настроено
-py -m bot                              # запуск
+py tools\configure.py                 # спросит токен, чат менеджера и ссылку на таблицу
+py tools\preflight.py                 # проверит, что всё настроено
+py -m bot                             # запуск
 ```
 
 `configure.py` сам найдёт JSON-ключ сервисного аккаунта в папке проекта,
@@ -90,16 +88,52 @@ py -m bot                              # запуск
 
 Остановить бота — `Ctrl+C`.
 
-### Команды бота
+> **Про виртуальное окружение.** На Windows оно не обязательно: команды выше
+> ставят зависимости в профиль пользователя (`--user`). Если создать `.venv`,
+> Windows со включённым Smart App Control (или политикой AppLocker) может
+> заблокировать `\.venv\Scripts\pip.exe` — «Политика управления приложениями
+> заблокировала этот файл». В этом случае просто работайте без venv,
+> вызывая `py -m pip` и `py -m bot`.
+>
+> Если venv уже создан и активирован (в приглашении видно `(.venv)`), выйдите
+> из него и удалите папку:
+>
+> ```powershell
+> deactivate
+> Remove-Item .venv -Recurse -Force
+> ```
+>
+> А если `--user` ругается «User site-packages are not visible in this
+> virtualenv» — уберите флаг: `py -m pip install -r requirements.txt`.
 
-| Команда   | Что делает                                                    |
-|-----------|---------------------------------------------------------------|
-| `/start`  | Начать (или начать заново) опрос                              |
-| `/cancel` | Прервать диалог, стереть временные данные (синоним — `/stop`)  |
-| `/id`     | Показать ID чата — так узнаётся `MANAGER_CHAT_ID`              |
-| `/stats`  | Сколько анкет в базе (отвечает только в чате менеджера)        |
+### Обновление проекта из GitHub
 
----
+Все изменения выкладываются в ветку `arena/01a0625e-tgbot`. Забрать свежую версию:
+
+```powershell
+.\tools\update.ps1
+```
+
+Скрипт сам определит, склонирован проект через git или распакован из ZIP,
+обновит код и зависимости. **Локальные настройки не пострадают** —
+`.env`, `config.yaml`, `credentials.json`, база `data\` и логи `logs\`
+останутся на месте (их нет в репозитории). В конце он покажет, какие из этих
+файлов найдены.
+
+Если предпочитаете вручную:
+
+```powershell
+# Вариант с git (один раз клонировать, дальше — git pull)
+git clone -b arena/01a0625e-tgbot https://github.com/sentinel11-11/tgBOT.git tgBOT
+cd tgBOT
+git pull
+
+# Вариант без git: скачать ZIP ветки и распаковать поверх
+Invoke-WebRequest "https://github.com/sentinel11-11/tgBOT/archive/refs/heads/arena/01a0625e-tgbot.zip" -OutFile "$env:TEMP\tgbot.zip"
+Expand-Archive "$env:TEMP\tgbot.zip" -DestinationPath "$env:TEMP\tgbot-src" -Force
+Copy-Item "$env:TEMP\tgbot-src\tgBOT-arena-01a0625e-tgbot\*" -Destination . -Recurse -Force
+py -m pip install --user -r requirements.txt
+```
 
 ## Конфигурация
 
@@ -510,6 +544,7 @@ tgBOT/
 │   └── logging_setup.py   логирование в консоль и файл
 ├── tools/
 │   ├── configure.py       первичная настройка: создаёт config.yaml и .env
+│   ├── update.ps1         обновление кода из GitHub (Windows)
 │   ├── preflight.py       проверка токена, менеджера, таблицы и базы
 │   ├── simulate.py        прогон диалога в терминале
 │   └── create_sheet.py    создание Google Таблицы под текущий сценарий
@@ -540,5 +575,7 @@ tgBOT/
 | `Файл ключа сервисного аккаунта не найден` | Положите JSON в папку проекта и запустите `python tools/configure.py` |
 | `The caller does not have permission` | Таблице не открыт доступ для сервисного аккаунта (`python tools/create_sheet.py --whoami` покажет адрес) |
 | Бот молчит на кнопки | Диалог завершён — отправьте `/start` |
+| `Политика управления приложениями заблокировала этот файл` | Windows блокирует `pip.exe` из `.venv`. Работайте без venv: `py -m pip install --user -r requirements.txt`, запуск — `py -m bot` |
+| `can't open file ...configure.py\` | Лишний обратный слэш в конце команды: нужно `py tools\configure.py` |
 | `Conflict: terminated by other getUpdates` | Тот же токен запущен второй раз — остановите лишнюю копию |
 | На сервере `Failed to start` | `journalctl -u axiom-bot -n 30` покажет причину; чаще всего пустой `BOT_TOKEN` в `/opt/axiom-bot/.env` |
