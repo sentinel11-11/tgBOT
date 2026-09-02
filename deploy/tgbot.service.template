@@ -1,0 +1,34 @@
+[Unit]
+Description=__DESCRIPTION__
+Documentation=https://github.com/sentinel11-11/tgBOT
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=__USER__
+Group=__USER__
+WorkingDirectory=__APP_DIR__
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONIOENCODING=utf-8
+EnvironmentFile=-__APP_DIR__/.env
+ExecStart=__APP_DIR__/.venv/bin/python -m bot
+
+# Перезапуск при падении и при обрыве сети
+Restart=always
+RestartSec=10
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=__SERVICE__
+
+# Изоляция: боту нужны только свои data/ и logs/
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=__APP_DIR__/data __APP_DIR__/logs
+
+[Install]
+WantedBy=multi-user.target

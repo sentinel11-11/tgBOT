@@ -22,7 +22,7 @@
 - [Хранение данных](#хранение-данных)
 - [Логи](#логи)
 - [Тесты и симулятор](#тесты-и-симулятор)
-- [Продакшн](#продакшн)
+- [Деплой на сервер](#деплой-на-сервер)
 - [Структура проекта](#структура-проекта)
 - [Частые проблемы](#частые-проблемы)
 
@@ -381,17 +381,99 @@ python tools/simulate.py --fast
 
 ---
 
-## Продакшн
+## Деплой на сервер
 
-**systemd** (см. `deploy/tgbot.service`):
+Бот ставится в отдельную папку, под отдельным пользователем и с уникальным именем
+сервиса, поэтому **другие боты на том же сервере не задеваются**. Портов бот не
+занимает (long polling), конфликтовать нечему.
 
-```bash
-sudo cp deploy/tgbot.service /etc/systemd/system/
-sudo systemctl daemon-reload && sudo systemctl enable --now tgbot
-journalctl -u tgbot -f
+### Перед первым деплоем
+
+Настройте бота локально — на сервер уедут уже готовые `.env`, `config.yaml`
+и `credentials.json`:
+
+```powershell
+py tools\configure.py
+py tools\preflight.py       # убедиться, что токен и таблица рабочие
 ```
 
-**Docker:**
+### Деплой одной командой (Windows)
+
+```powershell
+.\deploy\deploy.ps1 -Server root@ВАШ_СЕРВЕР -Port 22
+```
+
+Скрипт упакует проект, скопирует по SSH и запустит установщик на сервере.
+
+### То же самое вручную (если нужен контроль)
+
+```powershell
+cd "C:\путь\до\проекта"
+
+tar -czf $env:TEMP\axiom-bot.tar.gz --exclude="__pycache__" `
+    bot tools deploy requirements.txt config.example.yaml .env config.yaml credentials.json
+
+scp -P 22 $env:TEMP\axiom-bot.tar.gz root@ВАШ_СЕРВЕР:/tmp/
+
+ssh -p 22 root@ВАШ_СЕРВЕР "mkdir -p /tmp/axiom-src && tar -xzf /tmp/axiom-bot.tar.gz -C /tmp/axiom-src && cd /tmp/axiom-src && APP_NAME=axiom-bot bash deploy/install.sh && rm -rf /tmp/axiom-src /tmp/axiom-bot.tar.gz"
+```
+
+`install.sh` проверит Python, создаст пользователя `axiom-bot`, каталог
+`/opt/axiom-bot`, виртуальное окружение, поставит зависимости, напишет
+systemd-юнит, включит автозапуск и запустит сервис.
+
+### Управление на сервере
+
+```bash
+systemctl status axiom-bot            # состояние
+systemctl restart axiom-bot           # перезапуск
+systemctl stop axiom-bot              # остановить
+journalctl -u axiom-bot -f            # логи в реальном времени
+journalctl -u axiom-bot -n 50         # последние 50 строк
+
+cd /opt/axiom-bot && .venv/bin/python tools/preflight.py     # проверка настроек
+```
+
+### Обновление
+
+Повторный деплой — та же команда. Код заменяется, а **`.env`, `config.yaml`,
+`credentials.json` и база `data/candidates.db` на сервере сохраняются**:
+
+```powershell
+.\deploy\deploy.ps1 -Server root@ВАШ_СЕРВЕР -Port 22
+```
+
+Только код, без пересылки секретов:
+
+```powershell
+.\deploy\deploy.ps1 -Server root@ВАШ_СЕРВЕР -Port 22 -NoSecrets
+```
+
+### Несколько ботов на одном сервере
+
+Каждому — своё имя, свой каталог, свой сервис:
+
+```bash
+APP_NAME=second-bot bash deploy/install.sh     # /opt/second-bot, second-bot.service
+```
+
+Важно: **один и тот же токен нельзя запускать дважды** (например, на сервере
+и одновременно на ноутбуке) — Telegram ответит
+`Conflict: terminated by other getUpdates request`. Перед запуском на сервере
+остановите локальную копию.
+
+### Настройка прямо на сервере
+
+Если секреты не передавались, задайте их на месте:
+
+```bash
+cd /opt/axiom-bot
+nano .env                                    # BOT_TOKEN, MANAGER_CHAT_ID, таблица
+.venv/bin/python tools/preflight.py
+systemctl restart axiom-bot
+```
+
+### Docker (альтернатива)
 
 ```bash
 docker build -t tgbot .
@@ -403,15 +485,14 @@ docker run -d --name tgbot --restart unless-stopped \
 ```
 
 Бот работает в режиме long polling и сам переподключается при обрывах связи.
-Состояния диалогов хранятся в памяти: после перезапуска процесса кандидату нужно
+Состояния диалогов хранятся в памяти: после перезапуска сервиса кандидату нужно
 отправить `/start` заново. Если нужна непрерывность — подключается
 `PicklePersistence` / Redis-хранилище python-telegram-bot.
 
-**Безопасность:** токен и ключи только в `.env` / переменных окружения; `config.yaml`,
-`.env`, `credentials.json`, `data/`, `logs/` перечислены в `.gitignore`. Встроен
-лимит на частоту сообщений от одного пользователя (`rate_limit` в конфиге).
-
----
+**Безопасность:** секреты только в `.env` (на сервере — с правами `600`, владелец
+`axiom-bot`); `config.yaml`, `.env`, любые `*.json` в корне, `data/` и `logs/`
+перечислены в `.gitignore`. Встроен лимит на частоту сообщений от одного
+пользователя (`rate_limit` в конфиге).
 
 ## Структура проекта
 
@@ -433,7 +514,10 @@ tgBOT/
 │   ├── simulate.py        прогон диалога в терминале
 │   └── create_sheet.py    создание Google Таблицы под текущий сценарий
 ├── tests/                 pytest: конфиг, валидация, полный диалог, БД, Sheets
-├── deploy/tgbot.service   unit для systemd
+├── deploy/
+│   ├── install.sh         установка на сервер (systemd, venv, автозапуск)
+│   ├── deploy.ps1         загрузка на сервер по SSH из Windows
+│   └── tgbot.service.template  шаблон systemd-юнита
 ├── config.example.yaml    шаблон конфига (весь сценарий и тексты)
 └── .env.example           шаблон секретов
 ```
@@ -456,3 +540,5 @@ tgBOT/
 | `Файл ключа сервисного аккаунта не найден` | Положите JSON в папку проекта и запустите `python tools/configure.py` |
 | `The caller does not have permission` | Таблице не открыт доступ для сервисного аккаунта (`python tools/create_sheet.py --whoami` покажет адрес) |
 | Бот молчит на кнопки | Диалог завершён — отправьте `/start` |
+| `Conflict: terminated by other getUpdates` | Тот же токен запущен второй раз — остановите лишнюю копию |
+| На сервере `Failed to start` | `journalctl -u axiom-bot -n 30` покажет причину; чаще всего пустой `BOT_TOKEN` в `/opt/axiom-bot/.env` |
