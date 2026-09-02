@@ -195,7 +195,17 @@ def main() -> int:
             key_path = CREDENTIALS
             print(f"   Скопирован: {CREDENTIALS}")
 
-    sheets_enabled = bool(sheet_id) and CREDENTIALS.exists()
+    # Ключ мог просто не лежать рядом в момент запуска — не выключаем молча
+    # то, что пользователь уже настроил.
+    was_enabled = env.get("GOOGLE_SHEETS_ENABLED", "").strip().lower() in {"1", "true", "yes"}
+    sheets_enabled = bool(sheet_id) and (CREDENTIALS.exists() or was_enabled)
+    if sheets_enabled and not CREDENTIALS.exists():
+        print(
+            f"\nВНИМАНИЕ: {CREDENTIALS.name} не найден, но выгрузка в Sheets была включена —\n"
+            "оставляю её включённой. Положите файл ключа в папку проекта,\n"
+            "иначе строки в таблицу писаться не будут.",
+            file=sys.stderr,
+        )
 
     # --- .env -------------------------------------------------------------
     lines = [
@@ -228,7 +238,7 @@ def main() -> int:
     print(f"  Чат менеджера:    {manager or 'НЕ ЗАДАН — узнайте через /id'}")
     print(f"  Таблица:          {sheet_id or 'НЕ ЗАДАНА'}")
     print(f"  Лист:             {worksheet}")
-    print(f"  Ключ Google:      {'credentials.json' if CREDENTIALS.exists() else 'НЕ НАЙДЕН'}")
+    print(f"  Ключ Google:      {CREDENTIALS.name if CREDENTIALS.exists() else 'НЕ НАЙДЕН'}")
     print(f"  Выгрузка в Sheets:{' включена' if sheets_enabled else ' выключена'}")
 
     if CREDENTIALS.exists() and sheet_id:
