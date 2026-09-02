@@ -131,9 +131,20 @@ def main() -> int:
     token = args.token or env.get("BOT_TOKEN", "")
     if interactive and not args.token:
         print("\n1. Токен бота от @BotFather")
-        token = ask("   Вставьте токен", token, secret=True)
+        print("   Вида 123456789:AAExxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")
+        for attempt in range(3):
+            token = ask("   Вставьте токен (правая кнопка мыши — вставить)", token, secret=True)
+            if token:
+                break
+            if attempt < 2:
+                print("   Пусто. Скопируйте токен из чата с @BotFather и вставьте сюда.")
     if not token:
-        print("Токен обязателен — без него бот не запустится.", file=sys.stderr)
+        print(
+            "\nТокен обязателен — без него бот не запустится.\n"
+            "Можно передать его сразу в команде:\n"
+            '   py tools\\configure.py --token "123456789:AA..."',
+            file=sys.stderr,
+        )
         return 2
     if not TOKEN_RE.match(token):
         print(f"Токен выглядит странно: {token[:20]}... Ожидается вид 123456789:AA...",
@@ -185,7 +196,7 @@ def main() -> int:
         f"GOOGLE_SPREADSHEET_ID={sheet_id}",
         "",
         "# Прокси, если Telegram недоступен напрямую",
-        "# PROXY_URL=socks5://127.0.0.1:1081",
+        "# PROXY_URL=socks5://127.0.0.1:1082",
         "",
     ]
     ENV.write_text("\n".join(lines), encoding="utf-8")

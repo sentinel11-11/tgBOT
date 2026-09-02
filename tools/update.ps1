@@ -117,6 +117,21 @@ try {
         else { Write-Host "  нет    $file" -ForegroundColor DarkGray }
     }
 
+    # --- какая версия теперь стоит -----------------------------------------
+    try {
+        $ProgressPreference = "SilentlyContinue"
+        $commit = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/commits/$Branch" `
+            -Headers @{ "User-Agent" = "tgbot-updater" } -UseBasicParsing
+        $shortSha = $commit.sha.Substring(0, 7)
+        $when = ([datetime]$commit.commit.author.date).ToLocalTime().ToString("dd.MM.yyyy HH:mm")
+        $subject = ($commit.commit.message -split "`n")[0]
+        Write-Host "`nВерсия: $shortSha от $when" -ForegroundColor Cyan
+        Write-Host "        $subject"
+    }
+    catch {
+        Write-Host "`n(не удалось узнать номер версии — не критично)" -ForegroundColor DarkGray
+    }
+
     Write-Host "`n=== Готово ===" -ForegroundColor Green
     Write-Host "Дальше:"
     Write-Host "  py tools\preflight.py     # проверить настройки"
