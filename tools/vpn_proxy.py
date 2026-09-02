@@ -22,12 +22,22 @@ import json
 import sys
 import urllib.request
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 from urllib.parse import parse_qs, unquote, urlparse
 
-# Панели отдают браузеру HTML, а VPN-клиентам — сам список серверов,
-# поэтому представляемся клиентом.
-USER_AGENT = "v2rayNG/1.9.5"
+# Панели отдают разный формат в зависимости от того, каким клиентом
+# представиться: кому список ссылок, кому Clash YAML, кому sing-box JSON.
+# Перебираем по очереди, пока не найдём то, что умеем разобрать.
+USER_AGENTS = [
+    "v2rayNG/1.9.5",
+    "v2rayN/6.45",
+    "sing-box/1.9.0",
+    "clash-verge/1.5.11",
+    "Clash/1.18.0",
+    "curl/8.5.0",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+]
+USER_AGENT = USER_AGENTS[0]
 
 SUPPORTED = ("vless://", "vmess://", "trojan://", "ss://")
 
@@ -49,14 +59,36 @@ def _b64decode(data: str) -> bytes:
     return base64.b64decode(cleaned + "=" * padding)
 
 
+def fetch_once(url: str, user_agent: str, timeout: int = 30) -> tuple[str, str]:
+    """Одна попытка скачивания. Возвращает (тело, content-type)."""
+    request = urllib.request.Request(url, headers={"User-Agent": user_agent})
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        content_type = response.headers.get("Content-Type", "")
+        return response.read().decode("utf-8", errors="replace"), content_type
+
+
 def fetch_subscription(url: str, timeout: int = 30) -> str:
-    """Скачивает подписку по ссылке."""
-    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-    try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            return response.read().decode("utf-8", errors="replace")
-    except Exception as exc:  # noqa: BLE001
-        raise VpnError(f"Не удалось скачать подписку {url}: {exc}") from exc
+    """Скачивает подписку, перебирая User-Agent, пока формат не окажется понятным."""
+    last_payload = ""
+    last_error: Exception | None = None
+
+    for user_agent in USER_AGENTS:
+        try:
+            payload, _ = fetch_once(url, user_agent, timeout)
+        except Exception as exc:  # noqa: BLE001
+            last_error = exc
+            continue
+
+        last_payload = last_payload or payload
+        try:
+            if collect_nodes(payload):
+                return payload
+        except VpnError:
+            continue
+
+    if last_payload:
+        return last_payload  # пусть разбирается вызывающий — он покажет диагностику
+    raise VpnError(f"Не удалось скачать подписку {url}: {last_error}")
 
 
 def parse_subscription(payload: str) -> list[str]:
@@ -289,6 +321,255 @@ def parse_link(link: str) -> dict[str, Any]:
 
 
 # --------------------------------------------------------------------------- #
+#  Другие форматы подписки: Clash YAML и sing-box JSON
+# --------------------------------------------------------------------------- #
+
+
+def _clash_stream(proxy: Mapping[str, Any]) -> dict[str, Any]:
+    """Транспорт из записи Clash в формат Xray."""
+    network = str(proxy.get("network") or "tcp")
+    reality = proxy.get("reality-opts") or {}
+    tls_on = bool(proxy.get("tls")) or bool(reality)
+    sni = str(proxy.get("servername") or proxy.get("sni") or proxy.get("server") or "")
+
+    security = "reality" if reality else ("tls" if tls_on else "none")
+    stream: dict[str, Any] = {"network": network, "security": security}
+
+    if security == "reality":
+        stream["realitySettings"] = {
+            "serverName": sni,
+            "fingerprint": str(proxy.get("client-fingerprint") or "chrome"),
+            "publicKey": str(reality.get("public-key") or ""),
+            "shortId": str(reality.get("short-id") or ""),
+            "spiderX": "/",
+        }
+    elif security == "tls":
+        tls: dict[str, Any] = {
+            "serverName": sni,
+            "fingerprint": str(proxy.get("client-fingerprint") or "chrome"),
+        }
+        if proxy.get("skip-cert-verify"):
+            tls["allowInsecure"] = True
+        stream["tlsSettings"] = tls
+
+    if network == "ws":
+        ws_opts = proxy.get("ws-opts") or {}
+        headers = dict(ws_opts.get("headers") or {})
+        stream["wsSettings"] = {
+            "path": str(ws_opts.get("path") or proxy.get("ws-path") or "/"),
+            "headers": headers or ({"Host": sni} if sni else {}),
+        }
+    elif network == "grpc":
+        grpc_opts = proxy.get("grpc-opts") or {}
+        stream["grpcSettings"] = {
+            "serviceName": str(grpc_opts.get("grpc-service-name") or "")
+        }
+    return stream
+
+
+def parse_clash(payload: str) -> list[dict[str, Any]]:
+    """Подписка в формате Clash: ключ proxies со списком серверов."""
+    try:
+        import yaml  # PyYAML уже в зависимостях бота
+    except ImportError as exc:  # pragma: no cover
+        if "proxies:" in payload[:4000]:
+            raise VpnError(
+                "Подписка в формате Clash, но не установлен PyYAML. "
+                "Запустите скрипт через python из venv бота "
+                "(/opt/<бот>/.venv/bin/python) или поставьте: apt install python3-yaml"
+            ) from exc
+        return []
+
+    try:
+        data = yaml.safe_load(payload)
+    except Exception:  # noqa: BLE001
+        return []
+    if not isinstance(data, dict) or not isinstance(data.get("proxies"), list):
+        return []
+
+    nodes: list[dict[str, Any]] = []
+    for proxy in data["proxies"]:
+        if not isinstance(proxy, dict):
+            continue
+        kind = str(proxy.get("type") or "").lower()
+        name = str(proxy.get("name") or proxy.get("server") or "сервер")
+        host, port = str(proxy.get("server") or ""), int(proxy.get("port") or 0)
+        if not host or not port:
+            continue
+
+        if kind == "vless":
+            user: dict[str, Any] = {"id": str(proxy.get("uuid") or ""), "encryption": "none"}
+            if proxy.get("flow"):
+                user["flow"] = str(proxy["flow"])
+            outbound = {
+                "tag": "proxy", "protocol": "vless",
+                "settings": {"vnext": [{"address": host, "port": port, "users": [user]}]},
+                "streamSettings": _clash_stream(proxy),
+            }
+        elif kind == "vmess":
+            outbound = {
+                "tag": "proxy", "protocol": "vmess",
+                "settings": {"vnext": [{"address": host, "port": port, "users": [{
+                    "id": str(proxy.get("uuid") or ""),
+                    "alterId": int(proxy.get("alterId") or 0),
+                    "security": str(proxy.get("cipher") or "auto"),
+                }]}]},
+                "streamSettings": _clash_stream(proxy),
+            }
+        elif kind == "trojan":
+            outbound = {
+                "tag": "proxy", "protocol": "trojan",
+                "settings": {"servers": [{
+                    "address": host, "port": port, "password": str(proxy.get("password") or ""),
+                }]},
+                "streamSettings": _clash_stream({**proxy, "tls": True}),
+            }
+        elif kind in {"ss", "shadowsocks"}:
+            outbound = {
+                "tag": "proxy", "protocol": "shadowsocks",
+                "settings": {"servers": [{
+                    "address": host, "port": port,
+                    "method": str(proxy.get("cipher") or "aes-256-gcm"),
+                    "password": str(proxy.get("password") or ""),
+                }]},
+            }
+        else:
+            continue
+
+        nodes.append({"name": name, "outbound": outbound})
+    return nodes
+
+
+def parse_singbox(payload: str) -> list[dict[str, Any]]:
+    """Подписка в формате sing-box: массив outbounds."""
+    try:
+        data = json.loads(payload)
+    except ValueError:
+        return []
+    if not isinstance(data, dict) or not isinstance(data.get("outbounds"), list):
+        return []
+
+    nodes: list[dict[str, Any]] = []
+    for outbound in data["outbounds"]:
+        if not isinstance(outbound, dict):
+            continue
+        kind = str(outbound.get("type") or "").lower()
+        host = str(outbound.get("server") or "")
+        port = int(outbound.get("server_port") or 0)
+        name = str(outbound.get("tag") or host)
+        if kind not in {"vless", "vmess", "trojan", "shadowsocks"} or not host or not port:
+            continue
+
+        tls = outbound.get("tls") or {}
+        reality = tls.get("reality") or {}
+        transport = outbound.get("transport") or {}
+        network = str(transport.get("type") or "tcp")
+
+        if reality.get("enabled"):
+            security = "reality"
+        elif tls.get("enabled"):
+            security = "tls"
+        else:
+            security = "none"
+
+        stream: dict[str, Any] = {"network": network, "security": security}
+        sni = str(tls.get("server_name") or host)
+        fingerprint = str((tls.get("utls") or {}).get("fingerprint") or "chrome")
+
+        if security == "reality":
+            stream["realitySettings"] = {
+                "serverName": sni, "fingerprint": fingerprint,
+                "publicKey": str(reality.get("public_key") or ""),
+                "shortId": str(reality.get("short_id") or ""), "spiderX": "/",
+            }
+        elif security == "tls":
+            stream["tlsSettings"] = {"serverName": sni, "fingerprint": fingerprint}
+
+        if network == "ws":
+            headers = dict(transport.get("headers") or {})
+            stream["wsSettings"] = {
+                "path": str(transport.get("path") or "/"),
+                "headers": headers or {"Host": sni},
+            }
+        elif network == "grpc":
+            stream["grpcSettings"] = {"serviceName": str(transport.get("service_name") or "")}
+
+        if kind == "vless":
+            user: dict[str, Any] = {"id": str(outbound.get("uuid") or ""), "encryption": "none"}
+            if outbound.get("flow"):
+                user["flow"] = str(outbound["flow"])
+            body = {
+                "protocol": "vless",
+                "settings": {"vnext": [{"address": host, "port": port, "users": [user]}]},
+            }
+        elif kind == "vmess":
+            body = {
+                "protocol": "vmess",
+                "settings": {"vnext": [{"address": host, "port": port, "users": [{
+                    "id": str(outbound.get("uuid") or ""),
+                    "alterId": int(outbound.get("alter_id") or 0),
+                    "security": str(outbound.get("security") or "auto"),
+                }]}]},
+            }
+        elif kind == "trojan":
+            body = {
+                "protocol": "trojan",
+                "settings": {"servers": [{
+                    "address": host, "port": port,
+                    "password": str(outbound.get("password") or ""),
+                }]},
+            }
+        else:
+            body = {
+                "protocol": "shadowsocks",
+                "settings": {"servers": [{
+                    "address": host, "port": port,
+                    "method": str(outbound.get("method") or "aes-256-gcm"),
+                    "password": str(outbound.get("password") or ""),
+                }]},
+            }
+
+        nodes.append({"name": name, "outbound": {"tag": "proxy", **body, "streamSettings": stream}})
+    return nodes
+
+
+def collect_nodes(payload: str) -> list[dict[str, Any]]:
+    """Разбирает подписку в любом из поддерживаемых форматов."""
+    # 1) список ссылок (обычным текстом или base64)
+    try:
+        links = parse_subscription(payload)
+    except VpnError:
+        links = []
+    nodes = []
+    for link in links:
+        try:
+            nodes.append(parse_link(link))
+        except VpnError:
+            continue
+    if nodes:
+        return nodes
+
+    # 2) Clash YAML, 3) sing-box JSON
+    return parse_clash(payload) or parse_singbox(payload)
+
+
+def describe_payload(payload: str, limit: int = 400) -> str:
+    """Диагностика: что же всё-таки вернул сервер."""
+    text = payload.strip()
+    if not text:
+        return "пустой ответ"
+    head = text[:limit].replace("\n", "\n    ")
+    kind = "неизвестный формат"
+    if text.startswith("<"):
+        kind = "HTML-страница (нужен другой адрес подписки)"
+    elif text.startswith("{"):
+        kind = "JSON"
+    elif "proxies:" in text[:2000]:
+        kind = "Clash YAML"
+    return f"{kind}, {len(text)} символов. Начало ответа:\n    {head}"
+
+
+# --------------------------------------------------------------------------- #
 #  Конфиг Xray
 # --------------------------------------------------------------------------- #
 
@@ -358,6 +639,9 @@ def main() -> int:
     source.add_argument("--file", help="файл со списком ссылок")
 
     parser.add_argument("--list", action="store_true", help="показать серверы и выйти")
+    parser.add_argument(
+        "--dump", action="store_true", help="показать, что вернула подписка (диагностика)"
+    )
     parser.add_argument("--index", type=int, help="номер сервера (с 0, по умолчанию 0)")
     parser.add_argument("--name", help="выбрать сервер по части названия")
     parser.add_argument("--socks-port", type=int, default=1081, help="порт SOCKS5 (1081)")
@@ -367,24 +651,24 @@ def main() -> int:
 
     try:
         if args.link:
-            links = [args.link]
+            payload = args.link
         elif args.file:
-            links = parse_subscription(Path(args.file).read_text(encoding="utf-8"))
+            payload = Path(args.file).read_text(encoding="utf-8")
         else:
-            links = parse_subscription(fetch_subscription(args.subscription))
+            payload = fetch_subscription(args.subscription)
 
-        nodes: list[dict[str, Any]] = []
-        errors: list[str] = []
-        for link in links:
-            try:
-                nodes.append(parse_link(link))
-            except VpnError as exc:
-                errors.append(str(exc))
+        if args.dump:
+            print(describe_payload(payload, limit=2000))
+            return 0
 
+        nodes = collect_nodes(payload)
         if not nodes:
             raise VpnError(
-                "Ни одну ссылку не удалось разобрать:\n  " + "\n  ".join(errors[:5])
+                "В подписке не нашлось серверов в понятном формате "
+                "(ссылки vless/vmess/trojan/ss, Clash YAML или sing-box JSON).\n"
+                f"Что вернул сервер: {describe_payload(payload)}"
             )
+        errors: list[str] = []
 
         if args.list:
             print(f"Серверов в подписке: {len(nodes)}\n")

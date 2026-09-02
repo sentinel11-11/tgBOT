@@ -167,3 +167,135 @@ def test_config_exposes_local_socks_only():
 def test_config_is_valid_json():
     config = build_config(parse_link(VMESS)["outbound"])
     assert json.loads(json.dumps(config))["outbounds"][0]["protocol"] == "vmess"
+
+
+# --------------------------------------------------------------------------- #
+#  Другие форматы подписки: Clash YAML и sing-box JSON
+# --------------------------------------------------------------------------- #
+
+CLASH_YAML = """
+port: 7890
+proxies:
+  - name: "NL Smart"
+    type: vless
+    server: 45.10.20.30
+    port: 443
+    uuid: 11111111-2222-3333-4444-555555555555
+    tls: true
+    servername: www.microsoft.com
+    client-fingerprint: chrome
+    flow: xtls-rprx-vision
+    network: tcp
+    reality-opts:
+      public-key: PUBKEY123
+      short-id: ab12
+  - name: "DE WS"
+    type: vmess
+    server: cdn.example.com
+    port: 8443
+    uuid: 99999999-8888-7777-6666-555555555555
+    alterId: 0
+    cipher: auto
+    tls: true
+    network: ws
+    servername: cdn.example.com
+    ws-opts:
+      path: /vmess
+      headers:
+        Host: cdn.example.com
+  - name: "FI Trojan"
+    type: trojan
+    server: t.example.com
+    port: 443
+    password: secret
+    sni: t.example.com
+proxy-groups: []
+"""
+
+SINGBOX_JSON = """
+{
+  "outbounds": [
+    {
+      "type": "vless",
+      "tag": "SB Reality",
+      "server": "45.10.20.31",
+      "server_port": 443,
+      "uuid": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+      "flow": "xtls-rprx-vision",
+      "tls": {
+        "enabled": true,
+        "server_name": "www.cloudflare.com",
+        "utls": {"enabled": true, "fingerprint": "chrome"},
+        "reality": {"enabled": true, "public_key": "SBPUBKEY", "short_id": "cd34"}
+      }
+    },
+    {
+      "type": "shadowsocks",
+      "tag": "SB SS",
+      "server": "ss.example.com",
+      "server_port": 8388,
+      "method": "aes-256-gcm",
+      "password": "sspass"
+    },
+    {"type": "direct", "tag": "direct"}
+  ]
+}
+"""
+
+
+def test_clash_yaml_subscription():
+    from tools.vpn_proxy import parse_clash
+
+    nodes = parse_clash(CLASH_YAML)
+    assert [n["name"] for n in nodes] == ["NL Smart", "DE WS", "FI Trojan"]
+
+    reality = nodes[0]["outbound"]
+    assert reality["protocol"] == "vless"
+    assert reality["settings"]["vnext"][0]["users"][0]["flow"] == "xtls-rprx-vision"
+    assert reality["streamSettings"]["security"] == "reality"
+    assert reality["streamSettings"]["realitySettings"]["publicKey"] == "PUBKEY123"
+
+    vmess = nodes[1]["outbound"]
+    assert vmess["protocol"] == "vmess"
+    assert vmess["streamSettings"]["wsSettings"]["path"] == "/vmess"
+
+    assert nodes[2]["outbound"]["settings"]["servers"][0]["password"] == "secret"
+
+
+def test_singbox_json_subscription():
+    from tools.vpn_proxy import parse_singbox
+
+    nodes = parse_singbox(SINGBOX_JSON)
+    assert [n["name"] for n in nodes] == ["SB Reality", "SB SS"], "служебные outbounds пропущены"
+
+    reality = nodes[0]["outbound"]["streamSettings"]["realitySettings"]
+    assert reality["publicKey"] == "SBPUBKEY"
+    assert reality["serverName"] == "www.cloudflare.com"
+
+    assert nodes[1]["outbound"]["settings"]["servers"][0]["method"] == "aes-256-gcm"
+
+
+def test_collect_nodes_recognises_every_format():
+    from tools.vpn_proxy import collect_nodes
+
+    assert len(collect_nodes(VLESS_REALITY)) == 1
+    assert len(collect_nodes(base64.b64encode(VLESS_REALITY.encode()).decode())) == 1
+    assert len(collect_nodes(CLASH_YAML)) == 3
+    assert len(collect_nodes(SINGBOX_JSON)) == 2
+    assert collect_nodes("<html><body>вход</body></html>") == []
+
+
+def test_generated_config_from_clash_is_valid():
+    from tools.vpn_proxy import build_config, collect_nodes
+
+    config = build_config(collect_nodes(CLASH_YAML)[0]["outbound"], socks_port=1082)
+    assert json.loads(json.dumps(config))["inbounds"][0]["port"] == 1082
+
+
+def test_describe_payload_helps_diagnose():
+    from tools.vpn_proxy import describe_payload
+
+    assert "HTML" in describe_payload("<html><body>Subscription</body></html>")
+    assert "Clash YAML" in describe_payload(CLASH_YAML)
+    assert "JSON" in describe_payload(SINGBOX_JSON)
+    assert "пустой" in describe_payload("   ")

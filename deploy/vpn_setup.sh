@@ -65,6 +65,13 @@ UNIT_PATH="/etc/systemd/system/${XRAY_SERVICE}.service"
 
 command -v python3 >/dev/null 2>&1 || die "Нужен python3: apt install python3"
 
+# Для разбора подписок в формате Clash нужен PyYAML: он уже есть в venv бота,
+# поэтому предпочитаем его системному python3.
+PYTHON="python3"
+if [ -x "${APP_DIR}/.venv/bin/python" ]; then
+    PYTHON="${APP_DIR}/.venv/bin/python"
+fi
+
 # curl нужен для проверки доступа к Telegram через прокси
 if ! command -v curl >/dev/null 2>&1; then
     if [ "$(id -u)" -eq 0 ] && command -v apt-get >/dev/null 2>&1; then
@@ -99,7 +106,7 @@ port_busy() {
 # --------------------------------------------------------------------------- #
 if [ "${LIST_ONLY}" -eq 1 ]; then
     [ -n "${SUBSCRIPTION}" ] || die "Для --list нужна ссылка на подписку"
-    python3 "${VPN_TOOL}" --subscription "${SUBSCRIPTION}" --list
+    "${PYTHON}" "${VPN_TOOL}" --subscription "${SUBSCRIPTION}" --list
     exit 0
 fi
 
@@ -175,14 +182,14 @@ else
     fi
 
     info "Читаю подписку"
-    node_list="$(python3 "${VPN_TOOL}" --subscription "${SUBSCRIPTION}" --list)" \
+    node_list="$("${PYTHON}" "${VPN_TOOL}" --subscription "${SUBSCRIPTION}" --list)" \
         || die "Не удалось прочитать подписку (подробности выше)"
     echo "${node_list}" | sed 's/^/    /'
     node_count="$(echo "${node_list}" | grep -c '^[[:space:]]*\[[0-9]\+\]' || true)"
     [ "${node_count}" -gt 0 ] || die "В подписке нет серверов"
 
     apply_node() {
-        python3 "${VPN_TOOL}" --subscription "${SUBSCRIPTION}" \
+        "${PYTHON}" "${VPN_TOOL}" --subscription "${SUBSCRIPTION}" \
             --socks-port "${SOCKS_PORT}" --output "${XRAY_CONFIG}" "$@"
     }
 
@@ -192,7 +199,7 @@ else
     fi
 
     if [ "${DRY_RUN}" -eq 1 ]; then
-        python3 -c "import json,sys; json.load(open(sys.argv[1])); print('    JSON корректен')" "${XRAY_CONFIG}"
+        "${PYTHON}" -c "import json,sys; json.load(open(sys.argv[1])); print('    JSON корректен')" "${XRAY_CONFIG}"
         echo
         info "Так будет выглядеть unit-файл ${UNIT_PATH}:"
         sed -e "s|__APP_NAME__|${APP_NAME}|g" -e "s|__PORT__|${SOCKS_PORT}|g" \
