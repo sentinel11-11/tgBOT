@@ -147,6 +147,26 @@ class SurveyBot:
     #  Шаги
     # ------------------------------------------------------------------ #
 
+    async def ask_from(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE, index: int
+    ) -> int:
+        """Задаёт первый подходящий вопрос начиная с `index`.
+
+        Шаги с невыполненным условием ask_if пропускаются: в ответы попадает
+        их skip_value (обычно «—»), чтобы колонки отчёта не разъезжались.
+        """
+        answers = context.user_data.setdefault(ANSWERS, {})
+        position = index
+        while position < len(self.config.survey):
+            step = self.config.survey[position]
+            if self.config.should_ask(step, answers):
+                return await self.ask(update, context, position)
+            answers[step.key] = step.skip_value
+            if self.config.logging.log_steps:
+                logger.info("Шаг '%s' пропущен по условию", step.key)
+            position += 1
+        return await self.finish(update, context)
+
     async def ask(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE, index: int
     ) -> int:
@@ -185,8 +205,9 @@ class SurveyBot:
                 fallback_key = {
                     "yes_no": "invalid_yes_no",
                     "number": "invalid_number",
+                    "phone": "invalid_phone",
                     "text": "invalid_text",
-                }[step.type]
+                }.get(step.type, "invalid_text")
                 variants = step.invalid or self.config.message(fallback_key)
                 await self.reply(
                     update, context, self.render(variants, context, step), self.keyboard_for(step)
@@ -231,9 +252,7 @@ class SurveyBot:
                 return ConversationHandler.END
 
             # --- следующий шаг ------------------------------------------
-            if index + 1 < len(self.config.survey):
-                return await self.ask(update, context, index + 1)
-            return await self.finish(update, context)
+            return await self.ask_from(update, context, index + 1)
 
         handler.__name__ = f"step_{step.key}"
         return handler
@@ -251,13 +270,17 @@ class SurveyBot:
     # ------------------------------------------------------------------ #
 
     def summary_fields(self, answers: dict[str, Any], *, with_suffix: bool = True) -> str:
-        """Строки вида «ФИО: Иванов Иван Иванович» по шагам с label."""
+        """Строки вида «ФИО: Иванов Иван Иванович» по колонкам отчёта."""
+        suffixes = {step.key: step.suffix for step in self.config.survey}
+        # Прочерки в чат не показываем — они нужны только в таблице
+        placeholders = {"", "-", "—"} | {step.skip_value for step in self.config.survey}
         lines = []
-        for step in self.config.summary_steps:
-            if step.key in answers:
-                value = answers[step.key]
-                suffix = f" {step.suffix}" if step.suffix and with_suffix else ""
-                lines.append(f"{step.label}: {value}{suffix}")
+        for key, label in self.config.report_fields:
+            value = self.config.report_value(key, answers)
+            if value.strip() in placeholders:
+                continue
+            suffix = f" {suffixes[key]}" if with_suffix and suffixes.get(key) else ""
+            lines.append(f"{label}: {value}{suffix}")
         return "\n".join(lines)
 
     async def finish(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -381,7 +404,7 @@ class SurveyBot:
         context.user_data[ANSWERS] = {}
         context.user_data[RAW] = {}
         context.user_data[STARTED_AT] = self.now().isoformat()
-        return await self.ask(update, context, 0)
+        return await self.ask_from(update, context, 0)
 
     async def cmd_cancel(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         logger.info("Диалог отменён пользователем %s", getattr(update.effective_user, "id", "?"))

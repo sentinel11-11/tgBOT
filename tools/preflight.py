@@ -142,7 +142,7 @@ async def check_sheets(config: Config) -> bool:
         print("       Создать таблицу: python tools/create_sheet.py --share ваша@почта.com")
         return False
 
-    exporter = SheetsExporter(config.sheets, config.survey)
+    exporter = SheetsExporter(config.sheets, config.survey, config.columns)
     print(f"  таблица: {config.sheets.spreadsheet_id}, лист: «{config.sheets.worksheet}»")
     print(f"  колонки: {', '.join(exporter.header())}")
 

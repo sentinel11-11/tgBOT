@@ -128,6 +128,30 @@ class ValidationResult:
     stop: bool = False           # вежливое завершение (не отказ)
 
 
+def parse_phone(text: str) -> str | None:
+    """Номер телефона в единый вид: +79991234567.
+
+    Принимает «8 (999) 123-45-67», «+7 999 123 45 67», «79991234567».
+    Возвращает None, если это не похоже на номер.
+    """
+    text = (text or "").strip()
+    if not text:
+        return None
+    # Буквы в номере недопустимы (кроме привычных разделителей)
+    if any(char.isalpha() for char in text):
+        return None
+
+    digits = re.sub(r"\D", "", text)
+    if not 10 <= len(digits) <= 15:
+        return None
+
+    if len(digits) == 10:                      # 9991234567
+        return "+7" + digits
+    if len(digits) == 11 and digits[0] in "78":  # 89991234567 / 79991234567
+        return "+7" + digits[1:]
+    return "+" + digits
+
+
 def validate(step: Step, text: str) -> ValidationResult:
     """Проверяет ответ пользователя по правилам шага из конфига."""
     text = (text or "").strip()
@@ -147,6 +171,13 @@ def validate(step: Step, text: str) -> ValidationResult:
             return ValidationResult(ok=True, value=value, raw=answer, reject=True)
         return ValidationResult(ok=True, value=value, raw=answer)
 
+    # ---------------- Телефон ----------------
+    if step.type == "phone":
+        phone = parse_phone(text)
+        if phone is None:
+            return ValidationResult(ok=False, reason="invalid")
+        return ValidationResult(ok=True, value=phone, raw=text)
+
     # ---------------- Число ----------------
     if step.type == "number":
         number = parse_number(text)
@@ -158,6 +189,10 @@ def validate(step: Step, text: str) -> ValidationResult:
         if below or above:
             if step.reject_on == "out_of_range":
                 return ValidationResult(ok=True, value=number, raw=number, reject=True)
+            # Значение вне диапазона принимаем: кандидата не отсеиваем,
+            # а уточняем подробности следующим шагом (ask_if: out_of_range).
+            if step.accept_out_of_range:
+                return ValidationResult(ok=True, value=number, raw=number)
             return ValidationResult(ok=False, reason="out_of_range")
         return ValidationResult(ok=True, value=number, raw=number)
 

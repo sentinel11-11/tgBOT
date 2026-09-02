@@ -10,7 +10,7 @@ import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping, Sequence
 
 import yaml
 
@@ -30,7 +30,7 @@ class ConfigError(Exception):
 _TRUE = {"1", "true", "yes", "y", "on", "да"}
 _FALSE = {"0", "false", "no", "n", "off", "нет"}
 
-VALID_STEP_TYPES = {"yes_no", "text", "number"}
+VALID_STEP_TYPES = {"yes_no", "text", "number", "phone"}
 VALID_REJECT_ON = {"yes", "no", "out_of_range", None}
 
 
@@ -87,6 +87,15 @@ class Step:
     min_length: int = 1
     min: int | None = None
     max: int | None = None
+    #: Условие «задавать ли вопрос»: {"step": "health", "equals": "yes"}
+    #: или {"step": "age", "out_of_range": true}. Пусто — спрашивать всегда.
+    ask_if: dict[str, Any] | None = None
+    #: Что записать, если вопрос пропущен по условию
+    skip_value: str = "—"
+    #: Собрать ответ в общую колонку отчёта (например, «Комментарий»)
+    merge_into: str | None = None
+    #: Принимать значение вне диапазона min/max (вместо повторного вопроса)
+    accept_out_of_range: bool = False
 
     @property
     def in_summary(self) -> bool:
@@ -135,6 +144,19 @@ class Step:
                 f"survey '{key}': reject_on='{reject_on}' применим только к type='yes_no'"
             )
 
+        ask_if = raw.get("ask_if")
+        if ask_if is not None:
+            if not isinstance(ask_if, dict) or not str(ask_if.get("step") or "").strip():
+                raise ConfigError(
+                    f"survey '{key}': ask_if должен быть словарём с ключом 'step', "
+                    'например: ask_if: {step: health, equals: "yes"}'
+                )
+            if "equals" not in ask_if and "out_of_range" not in ask_if:
+                raise ConfigError(
+                    f"survey '{key}': в ask_if нужно указать equals: yes|no "
+                    "или out_of_range: true"
+                )
+
         stop_on = raw.get("stop_on")
         if stop_on is not None:
             stop_on = str(stop_on).strip().lower()
@@ -150,6 +172,10 @@ class Step:
             reject=as_list(raw.get("reject")),
             reject_on=reject_on,
             stop_on=stop_on,
+            ask_if=ask_if,
+            skip_value=str(raw.get("skip_value", "—")),
+            accept_out_of_range=bool(raw.get("accept_out_of_range", False)),
+            merge_into=(str(raw["merge_into"]).strip() if raw.get("merge_into") else None),
             yes_value=str(raw.get("yes_value", "Да")),
             no_value=str(raw.get("no_value", "Нет")),
             suffix=str(raw.get("suffix", "") or ""),
@@ -217,6 +243,83 @@ class ButtonsConfig:
     no_synonyms: list[str] = field(default_factory=list)
 
 
+# --------------------------------------------------------------------------- #
+#  Колонки отчёта: шаги + объединённые колонки (например, «Комментарий»)
+# --------------------------------------------------------------------------- #
+
+
+def report_fields(survey: Sequence["Step"], columns: Mapping[str, str]) -> list[tuple[str, str]]:
+    """Пары (ключ, заголовок) в порядке колонок отчёта.
+
+    Обычные шаги с label идут по порядку сценария, а объединённые колонки
+    (merge_into) — следом, в порядке первого упоминания.
+    """
+    fields: list[tuple[str, str]] = []
+    merged: list[str] = []
+    for step in survey:
+        if step.merge_into:
+            if step.merge_into not in merged:
+                merged.append(step.merge_into)
+        elif step.label:
+            fields.append((step.key, step.label))
+    for key in merged:
+        fields.append((key, str(columns.get(key, key))))
+    return fields
+
+
+def report_value(
+    survey: Sequence["Step"], key: str, answers: Mapping[str, Any], empty: str = "—"
+) -> str:
+    """Значение колонки: обычной или собранной из нескольких шагов."""
+    parts: list[str] = []
+    for step in survey:
+        if step.merge_into != key:
+            continue
+        value = str(answers.get(step.key, "") or "").strip()
+        if value and value != step.skip_value:
+            parts.append(f"{step.label}: {value}" if step.label else value)
+    if parts:
+        return "; ".join(parts)
+
+    if any(step.merge_into == key for step in survey):
+        return empty
+
+    value = answers.get(key, "")
+    return "" if value is None else str(value)
+
+
+def should_ask(survey: Sequence["Step"], step: "Step", answers: Mapping[str, Any]) -> bool:
+    """Задавать ли вопрос: учитывает условие ask_if."""
+    condition = step.ask_if
+    if not condition:
+        return True
+
+    ref_key = str(condition.get("step") or "")
+    reference = next((item for item in survey if item.key == ref_key), None)
+    if reference is None or ref_key not in answers:
+        return False
+
+    value = answers[ref_key]
+
+    if "equals" in condition:
+        expected = str(condition["equals"]).strip().lower()
+        if reference.type == "yes_no":
+            actual = "yes" if str(value) == reference.yes_value else "no"
+            return actual == expected
+        return str(value).strip().lower() == expected
+
+    if condition.get("out_of_range"):
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return False
+        below = reference.min is not None and number < reference.min
+        above = reference.max is not None and number > reference.max
+        return bool(below or above)
+
+    return True
+
+
 @dataclass
 class Config:
     """Полная конфигурация приложения."""
@@ -229,6 +332,9 @@ class Config:
     proxy: str | None = None
     emoji: bool = True
     timezone: str = "Europe/Moscow"
+
+    #: Заголовки объединённых колонок отчёта: {"comment": "Комментарий"}
+    columns: dict[str, str] = field(default_factory=dict)
 
     typing: TypingConfig = field(default_factory=TypingConfig)
     rate_limit: RateLimitConfig = field(default_factory=RateLimitConfig)
@@ -243,6 +349,19 @@ class Config:
     manager_notification: str = ""
 
     # ------------------------------------------------------------------ #
+
+    @property
+    def report_fields(self) -> list[tuple[str, str]]:
+        """Колонки отчёта: подписи шагов плюс объединённые колонки."""
+        return report_fields(self.survey, self.columns)
+
+    def report_value(self, key: str, answers: Mapping[str, Any]) -> str:
+        """Значение колонки отчёта по её ключу."""
+        return report_value(self.survey, key, answers)
+
+    def should_ask(self, step: Step, answers: Mapping[str, Any]) -> bool:
+        """Нужно ли задавать этот вопрос при текущих ответах."""
+        return should_ask(self.survey, step, answers)
 
     @property
     def manager_chat_ids(self) -> list[str]:
@@ -269,6 +388,7 @@ DEFAULT_MESSAGES: dict[str, list[str]] = {
     "invalid_yes_no": ["Ответьте «Да» или «Нет», пожалуйста."],
     "invalid_number": ["Пожалуйста, введите число."],
     "invalid_text": ["Напишите, пожалуйста, ответ текстом."],
+    "invalid_phone": ["Не похоже на номер телефона. Например: +7 999 123-45-67."],
     "cancel": ["Диалог прерван. Если передумаете — напишите /start снова."],
     "summary": ["Итак, резюмируем:\n\n{fields}"],
     "finish": ["Спасибо! Специалист свяжется с вами в ближайшее время."],
@@ -408,6 +528,7 @@ def load_config(path: str | Path | None = None) -> Config:
         token=token,
         bot_name=str(bot_section.get("name", "Консультант")),
         manager_chat_id=manager_chat_id,
+        columns={str(k): str(v) for k, v in (raw.get("columns") or {}).items()},
         proxy=proxy,
         emoji=bool(bot_section.get("emoji", True)),
         timezone=str(bot_section.get("timezone", "Europe/Moscow")),

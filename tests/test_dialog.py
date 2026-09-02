@@ -46,19 +46,23 @@ async def test_full_successful_dialog(survey, bot_and_context):
     assert state == 1
 
     state = await run_step(survey, state, "Иванов Иван Иванович", context)
-    assert state == 2
+    assert state == 2                                    # телефон
+
+    state = await run_step(survey, state, "8 999 123 45 67", context)
+    assert state == 3                                    # возраст
 
     state = await run_step(survey, state, "35", context)
-    assert state == 3
+    assert state == 5, "возраст в норме — уточнение (шаг 4) пропущено"
 
     state = await run_step(survey, state, "Нет", context)
-    assert state == 4
+    assert state == 7, "здоровье в порядке — уточнение (шаг 6) пропущено"
 
     state = await run_step(survey, state, "Нет", context)
-    assert state == ConversationHandler.END
+    assert state == ConversationHandler.END, "судимостей нет — статья и комментарий пропущены"
 
     user_texts = "\n".join(bot.texts_for(42))
     assert "ФИО: Иванов Иван Иванович" in user_texts
+    assert "Телефон: +79991234567" in user_texts, "номер приведён к единому виду"
     assert "Возраст: 35 лет" in user_texts
     assert "Здоровье: Нет проблем" in user_texts
     assert "Судимости: Нет судимостей" in user_texts
@@ -70,6 +74,7 @@ async def test_full_successful_dialog(survey, bot_and_context):
     assert "Новый кандидат" in notification
     assert "Иванов Иван Иванович" in notification
     assert "Возраст: 35" in notification and "35 лет" not in notification
+    assert "Статья" not in notification, "прочерки в карточку не попадают"
     assert "@ivanov" in notification
     assert "ID: 42" in notification
 
@@ -92,39 +97,88 @@ async def test_not_interested_ends_dialog(survey, bot_and_context):
     assert bot.texts_for(MANAGER_CHAT) == []
 
 
-async def test_age_above_limit_rejects(survey, bot_and_context):
+async def test_age_above_limit_asks_details_instead_of_rejecting(survey, bot_and_context):
+    """Возраст больше максимума — не отказ, а уточняющий вопрос."""
     bot, context = bot_and_context
     state = await survey.cmd_start(make_update("/start"), context)
     state = await run_step(survey, state, "Да", context)
     state = await run_step(survey, state, "Иванов Иван Иванович", context)
+    state = await run_step(survey, state, "8 999 123 45 67", context)
     state = await run_step(survey, state, "70", context)
 
+    assert state == 4, "задан шаг с уточнением по возрасту"
+    assert state != ConversationHandler.END
+
+    state = await run_step(survey, state, "был в армии, форма отличная", context)
+    state = await run_step(survey, state, "Нет", context)          # здоровье
+    state = await run_step(survey, state, "Нет", context)          # судимости
     assert state == ConversationHandler.END
-    assert "63" in bot.last
-    assert bot.texts_for(MANAGER_CHAT) == []
+
+    notification = bot.texts_for(MANAGER_CHAT)[0]
+    assert "Возраст: 70" in notification
+    assert "был в армии" in notification, "уточнение попало в комментарий"
+    assert await survey.storage.count() == 1
 
 
-async def test_health_problem_rejects(survey, bot_and_context):
+async def test_health_problem_is_recorded_with_comment(survey, bot_and_context):
+    """Ограничения по здоровью — спрашиваем подробности и сохраняем."""
     bot, context = bot_and_context
     state = await survey.cmd_start(make_update("/start"), context)
-    state = await run_step(survey, state, "Да", context)
-    state = await run_step(survey, state, "Иванов Иван Иванович", context)
-    state = await run_step(survey, state, "35", context)
-    state = await run_step(survey, state, "Да", context)
-
-    assert state == ConversationHandler.END
-    assert bot.texts_for(MANAGER_CHAT) == []
-
-
-async def test_criminal_record_rejects(survey, bot_and_context):
-    bot, context = bot_and_context
-    state = await survey.cmd_start(make_update("/start"), context)
-    for answer in ("Да", "Иванов Иван Иванович", "35", "Нет"):
+    for answer in ("Да", "Иванов Иван Иванович", "8 999 123 45 67", "35"):
         state = await run_step(survey, state, answer, context)
-    state = await run_step(survey, state, "Да", context)
 
+    state = await run_step(survey, state, "Да", context)           # есть ограничения
+    assert state == 6, "задан вопрос о деталях здоровья"
+
+    state = await run_step(survey, state, "астма лёгкой формы", context)
+    state = await run_step(survey, state, "Нет", context)          # судимости
     assert state == ConversationHandler.END
-    assert bot.texts_for(MANAGER_CHAT) == []
+
+    notification = bot.texts_for(MANAGER_CHAT)[0]
+    assert "Здоровье: Есть ограничения" in notification
+    assert "астма лёгкой формы" in notification
+    assert await survey.storage.count() == 1
+
+
+async def test_criminal_record_asks_article_and_comment(survey, bot_and_context):
+    """Судимость — спрашиваем номер статьи и комментарий, кандидата сохраняем."""
+    bot, context = bot_and_context
+    state = await survey.cmd_start(make_update("/start"), context)
+    for answer in ("Да", "Иванов Иван Иванович", "8 999 123 45 67", "35", "Нет"):
+        state = await run_step(survey, state, answer, context)
+
+    state = await run_step(survey, state, "Да", context)           # есть судимость
+    assert state == 8, "задан вопрос о статье"
+
+    state = await run_step(survey, state, "158", context)
+    assert state == 9, "задан вопрос о комментарии"
+
+    state = await run_step(survey, state, "погашена в 2015", context)
+    assert state == ConversationHandler.END
+
+    notification = bot.texts_for(MANAGER_CHAT)[0]
+    assert "Статья: 158" in notification
+    assert "погашена в 2015" in notification
+    assert await survey.storage.count() == 1
+
+
+async def test_skipped_steps_get_dash_in_report(survey, bot_and_context):
+    """Пропущенные уточнения превращаются в прочерк для таблицы."""
+    bot, context = bot_and_context
+    state = await survey.cmd_start(make_update("/start"), context)
+    for answer in ("Да", "Иванов Иван Иванович", "8 999 123 45 67", "35", "Нет", "Нет"):
+        state = await run_step(survey, state, answer, context)
+    assert state == ConversationHandler.END
+
+    row = survey.sheets.row(
+        answers={"full_name": "Иванов Иван Иванович", "phone": "+79991234567", "age": 35,
+                 "health": "Нет проблем", "crime": "Нет судимостей",
+                 "crime_article": "—", "age_comment": "—",
+                 "health_details": "—", "crime_comment": "—"},
+        username="@ivanov", user_id=42, status="completed",
+        created_at=survey.now(),
+    )
+    assert "—" in row, "прочерки есть в строке таблицы"
 
 
 # --------------------------------------------------------------------------- #
@@ -161,13 +215,14 @@ async def test_non_numeric_age_asks_again(survey, bot_and_context):
     state = await survey.cmd_start(make_update("/start"), context)
     state = await run_step(survey, state, "Да", context)
     state = await run_step(survey, state, "Иванов Иван Иванович", context)
+    state = await run_step(survey, state, "8 999 123 45 67", context)
 
     state = await run_step(survey, state, "чуть за тридцать, наверное", context)
-    assert state == 2
+    assert state == 3, "остались на шаге возраста"
     assert context.user_data["answers"].get("age") is None
 
     state = await run_step(survey, state, "35", context)
-    assert state == 3
+    assert state == 5
 
 
 # --------------------------------------------------------------------------- #
@@ -190,7 +245,7 @@ async def test_manager_notification_failure_does_not_break_dialog(survey, bot_an
     bot.fail_chats.add(MANAGER_CHAT)  # имитируем "Chat not found"
 
     state = await survey.cmd_start(make_update("/start"), context)
-    for answer in ("Да", "Иванов Иван Иванович", "35", "Нет", "Нет"):
+    for answer in ("Да", "Иванов Иван Иванович", "8 999 123 45 67", "35", "Нет", "Нет"):
         state = await run_step(survey, state, answer, context)
 
     assert state == ConversationHandler.END

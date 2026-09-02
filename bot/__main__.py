@@ -116,7 +116,7 @@ def main() -> int:
     )
     storage.init()
 
-    sheets = SheetsExporter(config.sheets, config.survey)
+    sheets = SheetsExporter(config.sheets, config.survey, config.columns)
 
     survey = SurveyBot(config, storage=storage, sheets=sheets)
 

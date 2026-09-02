@@ -133,3 +133,27 @@ def test_yes_no_unrecognized():
     step = make_step(type="yes_no")
     result = validate(step, "может быть")
     assert result.ok is False and result.reason == "invalid"
+
+
+# --------------------------------------------------------------------------- #
+#  Телефон
+# --------------------------------------------------------------------------- #
+
+@pytest.mark.parametrize("text,expected", [
+    ("8 999 123 45 67", "+79991234567"),
+    ("+7 (999) 123-45-67", "+79991234567"),
+    ("79991234567", "+79991234567"),
+    ("9991234567", "+79991234567"),
+    ("+380 44 123 45 67", "+380441234567"),
+])
+def test_phone_normalised(text, expected):
+    from bot.validators import parse_phone
+
+    assert parse_phone(text) == expected
+
+
+@pytest.mark.parametrize("text", ["позвоните мне", "12345", "", "+7999123456789012"])
+def test_phone_rejected(text):
+    from bot.validators import parse_phone
+
+    assert parse_phone(text) is None

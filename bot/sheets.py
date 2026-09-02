@@ -23,7 +23,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
-from .config import SheetsConfig, Step
+from .config import SheetsConfig, Step, report_fields, report_value
 
 logger = logging.getLogger(__name__)
 
@@ -95,8 +95,15 @@ class SheetsExporter:
     #: базовая пауза между попытками (удваивается)
     retry_delay = 2.0
 
-    def __init__(self, config: SheetsConfig, steps: Sequence[Step]) -> None:
+    def __init__(
+        self,
+        config: SheetsConfig,
+        steps: Sequence[Step],
+        columns: Mapping[str, str] | None = None,
+    ) -> None:
         self.config = config
+        self.survey = list(steps)
+        self.columns = dict(columns or {})
         self.steps = [step for step in steps if step.in_summary]
         self._worksheet: Any = None
         self._lock = threading.Lock()
@@ -139,11 +146,16 @@ class SheetsExporter:
     def enabled(self) -> bool:
         return bool(self.config.enabled)
 
+    @property
+    def fields(self) -> list[tuple[str, str]]:
+        """Колонки отчёта: шаги с подписями плюс объединённые (комментарий)."""
+        return report_fields(self.survey, self.columns)
+
     def header(self) -> list[str]:
-        """Строка заголовков — формируется из подписей шагов конфига."""
+        """Строка заголовков — формируется из подписей колонок конфига."""
         return (
             ["Дата и время"]
-            + [step.label or step.key for step in self.steps]
+            + [label for _, label in self.fields]
             + ["Телеграм", "User ID", "Статус"]
         )
 
@@ -158,8 +170,8 @@ class SheetsExporter:
     ) -> list[str]:
         """Готовит строку в том же порядке, что и header()."""
         values = [created_at.strftime("%d.%m.%Y %H:%M:%S")]
-        for step in self.steps:
-            values.append(str(answers.get(step.key, "")))
+        for key, _ in self.fields:
+            values.append(report_value(self.survey, key, answers))
         values += [username, str(user_id), status]
         return values
 

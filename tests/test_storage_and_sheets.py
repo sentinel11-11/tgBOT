@@ -86,19 +86,20 @@ async def test_storage_disabled_is_noop(config, tmp_path):
 # --------------------------------------------------------------------------- #
 
 def test_sheets_header_follows_config(config):
-    exporter = SheetsExporter(config.sheets, config.survey)
+    exporter = SheetsExporter(config.sheets, config.survey, config.columns)
     assert exporter.header() == [
-        "Дата и время", "ФИО", "Возраст", "Здоровье", "Судимости",
-        "Телеграм", "User ID", "Статус",
+        "Дата и время", "ФИО", "Телефон", "Возраст", "Здоровье", "Судимости",
+        "Статья", "Комментарий", "Телеграм", "User ID", "Статус",
     ]
 
 
 def test_sheets_row_matches_header(config):
     from datetime import datetime
 
-    exporter = SheetsExporter(config.sheets, config.survey)
+    exporter = SheetsExporter(config.sheets, config.survey, config.columns)
     row = exporter.row(
-        answers=ANSWERS,
+        answers={**ANSWERS, "phone": "+79991234567", "crime_article": "—",
+                 "age_comment": "—", "health_details": "—", "crime_comment": "—"},
         username="@ivanov",
         user_id=42,
         status="Прошёл отбор",
@@ -106,9 +107,31 @@ def test_sheets_row_matches_header(config):
     )
     assert len(row) == len(exporter.header())
     assert row == [
-        "02.09.2026 15:30:45", "Иванов Иван Иванович", "35",
-        "Нет проблем", "Нет судимостей", "@ivanov", "42", "Прошёл отбор",
+        "02.09.2026 15:30:45", "Иванов Иван Иванович", "+79991234567", "35",
+        "Нет проблем", "Нет судимостей", "—", "—", "@ivanov", "42", "Прошёл отбор",
     ]
+
+
+def test_sheets_row_collects_comment_from_several_steps(config):
+    """Уточнения по возрасту, здоровью и судимости — в одной колонке «Комментарий»."""
+    from datetime import datetime
+
+    exporter = SheetsExporter(config.sheets, config.survey, config.columns)
+    row = exporter.row(
+        answers={
+            "full_name": "Петров Пётр", "phone": "+79991234567", "age": 70,
+            "age_comment": "был в армии", "health": "Есть ограничения",
+            "health_details": "астма", "crime": "Есть судимость",
+            "crime_article": "158", "crime_comment": "погашена в 2015",
+        },
+        username="@petrov", user_id=7, status="completed",
+        created_at=datetime(2026, 9, 2, 15, 30, 45),
+    )
+    columns = dict(zip(exporter.header(), row))
+    assert columns["Статья"] == "158"
+    assert columns["Комментарий"] == (
+        "Возраст: был в армии; Здоровье: астма; Судимость: погашена в 2015"
+    )
 
 
 async def test_sheets_disabled_returns_false(config):
