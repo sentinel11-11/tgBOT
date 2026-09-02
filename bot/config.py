@@ -416,8 +416,10 @@ def load_config(path: str | Path | None = None) -> Config:
 
     if config.sheets.enabled and not config.sheets.spreadsheet_id:
         raise ConfigError(
-            "google_sheets.enabled = true, но не задан spreadsheet_id "
-            "(config.yaml -> google_sheets.spreadsheet_id или GOOGLE_SPREADSHEET_ID)"
+            "google_sheets.enabled = true, но не задан spreadsheet_id.\n"
+            "Укажите его в GOOGLE_SPREADSHEET_ID (.env) или config.yaml -> "
+            "google_sheets.spreadsheet_id.\n"
+            "Если таблицы ещё нет:  python tools/create_sheet.py --share ваша@почта.com"
         )
 
     return config

@@ -385,6 +385,20 @@ class SurveyBot:
         """Сообщение вне диалога."""
         await self.reply(update, context, self.render(self.config.message("idle"), context))
 
+    async def cmd_id(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Показывает id чата — так менеджер узнаёт свой MANAGER_CHAT_ID."""
+        chat = update.effective_chat
+        user = update.effective_user
+        if chat is None:
+            return
+        lines = [f"ID этого чата: {chat.id}"]
+        if user is not None and user.id != chat.id:
+            lines.append(f"Ваш ID: {user.id}")
+        lines.append("")
+        lines.append("Впишите нужный ID в MANAGER_CHAT_ID (файл .env) и перезапустите бота.")
+        await self.reply(update, context, "\n".join(lines))
+        logger.info("Запрошен id чата: %s (пользователь %s)", chat.id, getattr(user, "id", "?"))
+
     async def cmd_stats(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Количество сохранённых анкет. Доступно только чату менеджера."""
         chat = update.effective_chat
@@ -437,6 +451,7 @@ class SurveyBot:
     def register(self, application: Application) -> None:
         """Вешает все обработчики на приложение."""
         application.add_handler(self.build_conversation())
+        application.add_handler(CommandHandler("id", self.cmd_id))
         application.add_handler(CommandHandler("stats", self.cmd_stats))
         application.add_handler(CommandHandler("cancel", self.cmd_cancel))
         application.add_handler(

@@ -40,7 +40,20 @@ cp config.example.yaml config.yaml     # сценарий и тексты
 cp .env.example .env                   # секреты
 
 # в .env укажите BOT_TOKEN (от @BotFather) и MANAGER_CHAT_ID
+python tools/preflight.py              # проверка: токен, менеджер, таблица, база
 python -m bot
+```
+
+`preflight.py` — главный инструмент диагностики. Он проверяет токен через `getMe`,
+реально отправляет тестовое сообщение менеджеру, дописывает тестовую строку
+в Google Таблицу и открывает базу, а по каждой неудаче объясняет, что чинить:
+
+```
+1. Telegram API
+  [ OK ] бот @AxiomAndrewbot (id 8840010912), имя в диалоге: «Андрей»
+2. Чат менеджера
+  [ОШИБКА] MANAGER_CHAT_ID не задан — уведомления о кандидатах отправляться не будут
+       Напишите боту команду /id, он ответит числом. Впишите его в .env
 ```
 
 В логе должно появиться:
@@ -59,6 +72,7 @@ python -m bot
 |-----------|---------------------------------------------------------------|
 | `/start`  | Начать (или начать заново) опрос                              |
 | `/cancel` | Прервать диалог, стереть временные данные (синоним — `/stop`)  |
+| `/id`     | Показать ID чата — так узнаётся `MANAGER_CHAT_ID`              |
 | `/stats`  | Сколько анкет в базе (отвечает только в чате менеджера)        |
 
 ---
@@ -151,35 +165,41 @@ survey:
 |---|---|---|---|---|---|---|---|
 | 02.09.2026 15:30:45 | Иванов Иван Иванович | 35 | Нет проблем | Нет судимостей | @ivanov | 123456789 | Прошёл отбор |
 
-### Настройка (5 минут)
+### Настройка
 
-1. [Google Cloud Console](https://console.cloud.google.com/) → создайте проект.
-2. **APIs & Services → Library** → включите **Google Sheets API** и **Google Drive API**.
-3. **APIs & Services → Credentials → Create credentials → Service account** →
-   создайте аккаунт → вкладка **Keys → Add key → JSON**. Скачанный файл положите
-   в корень проекта как `credentials.json` (он в `.gitignore`).
-4. Создайте таблицу в Google Sheets и нажмите **Поделиться** → добавьте e-mail
-   сервисного аккаунта (вида `bot@project.iam.gserviceaccount.com`) с ролью **Редактор**.
-5. Скопируйте ID таблицы из URL: `docs.google.com/spreadsheets/d/`**`ЭТА_ЧАСТЬ`**`/edit`.
-6. В конфиге:
+Ключ сервисного аккаунта (JSON из Google Cloud) положите в корень проекта
+как `credentials.json` — он в `.gitignore`.
 
-```yaml
-google_sheets:
-  enabled: true
-  credentials_file: "credentials.json"
-  spreadsheet_id: "1AbCdEf...ваш_id"
-  worksheet: "Кандидаты"     # лист создастся автоматически
-  write_header: true
-```
-
-7. Проверьте подключение до запуска бота:
+**Если таблицы ещё нет** — бот создаст её сам, с заголовками и доступом для вас:
 
 ```bash
-python tools/check_sheets.py
+python tools/create_sheet.py --share ваша@почта.com
 ```
 
-Скрипт подключится, создаст лист с заголовками и добавит тестовую строку
-(её можно удалить), а при ошибке подскажет причину.
+Скрипт напечатает ссылку на таблицу и готовые строки для `.env`:
+
+```
+GOOGLE_SHEETS_ENABLED=true
+GOOGLE_SPREADSHEET_ID=1AbCdEf...
+```
+
+**Если таблица уже есть** — узнайте адрес сервисного аккаунта:
+
+```bash
+python tools/create_sheet.py --whoami
+```
+
+откройте таблице доступ для этого адреса (**Поделиться → Редактор**) и впишите
+её id в `.env` (id — часть URL между `/d/` и `/edit`).
+
+В обоих случаях в проекте Google Cloud должны быть включены **Google Sheets API**
+и **Google Drive API** (*APIs & Services → Library*).
+
+Проверка:
+
+```bash
+python tools/preflight.py
+```
 
 **Важно:** если Google Sheets недоступен (нет сети, кончилась квота, отозван доступ),
 ошибка попадёт в лог, а диалог с кандидатом продолжится как обычно — анкета
@@ -191,7 +211,7 @@ python tools/check_sheets.py
 
 Куда слать — `MANAGER_CHAT_ID` (или `bot.manager_chat_id`). Подойдёт:
 
-- ID пользователя: `123456789` — узнать можно у `@userinfobot`;
+- ID пользователя: `123456789` — **напишите боту `/id`**, он ответит числом;
 - ID группы: `-1001234567890` — бота нужно добавить в группу;
 - канал: `@channel_name` — бот должен быть администратором.
 
@@ -307,6 +327,12 @@ pip install -r requirements-dev.txt
 pytest                       # 74 теста: конфиг, валидация, диалог, БД, Sheets
 ```
 
+Проверить настройки перед запуском:
+
+```bash
+python tools/preflight.py
+```
+
 Прогнать диалог в терминале без Telegram, токена и прокси — удобно вычитывать тексты:
 
 ```bash
@@ -378,8 +404,9 @@ tgBOT/
 │   ├── sheets.py          выгрузка в Google Sheets
 │   └── logging_setup.py   логирование в консоль и файл
 ├── tools/
+│   ├── preflight.py       проверка токена, менеджера, таблицы и базы
 │   ├── simulate.py        прогон диалога в терминале
-│   └── check_sheets.py    проверка доступа к Google Таблице
+│   └── create_sheet.py    создание Google Таблицы под текущий сценарий
 ├── tests/                 pytest: конфиг, валидация, полный диалог, БД, Sheets
 ├── deploy/tgbot.service   unit для systemd
 ├── config.example.yaml    шаблон конфига (весь сценарий и тексты)
@@ -397,7 +424,9 @@ tgBOT/
 | `Сетевая ошибка при подключении к Telegram` | Нет доступа к API — укажите `PROXY_URL` |
 | `Проверьте, работает ли прокси` | Прокси-сервер не запущен или указан неверный порт |
 | `Не удалось отправить уведомление менеджеру: Chat not found` | Неверный `MANAGER_CHAT_ID`, либо менеджер не писал боту `/start`, либо бот не добавлен в группу |
+| `Forbidden: bot can't initiate conversation with a user` | Менеджер должен первым написать боту `/start` |
 | `manager_chat_id не задан` | Уведомления выключены — задайте `MANAGER_CHAT_ID` |
-| В таблицу ничего не пишется | Запустите `python tools/check_sheets.py` — он назовёт причину |
+| В таблицу ничего не пишется | Запустите `python tools/preflight.py` — он назовёт причину |
+| `Не удалось создать таблицу` | В Google Cloud не включены Sheets API и Drive API |
 | `Файл ключа сервисного аккаунта не найден` | Неверный путь в `google_sheets.credentials_file` |
 | Бот молчит на кнопки | Диалог завершён — отправьте `/start` |

@@ -71,7 +71,18 @@ def make_update(text: str):
     )
 
 
+def _load_dotenv() -> None:
+    """Токен может лежать в .env — конфиг без него не загрузится."""
+    try:
+        from dotenv import load_dotenv
+    except ImportError:
+        return
+    if Path(".env").exists():
+        load_dotenv(Path(".env"))
+
+
 async def run(config_path: str | None, fast: bool) -> int:
+    _load_dotenv()
     try:
         config = load_config(config_path) if config_path else load_config()
     except ConfigError as exc:

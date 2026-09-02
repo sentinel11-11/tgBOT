@@ -233,3 +233,11 @@ async def test_typing_action_is_sent_when_enabled(survey, bot_and_context):
 
     await survey.cmd_start(make_update("/start"), context)
     assert bot.actions, "Бот должен показывать статус «печатает...»"
+
+
+async def test_id_command_reports_chat_id(survey, bot_and_context):
+    """Команда /id нужна менеджеру, чтобы узнать MANAGER_CHAT_ID."""
+    bot, context = bot_and_context
+    await survey.cmd_id(make_update("/id", user_id=777, chat_id=777), context)
+    assert "777" in bot.last
+    assert "MANAGER_CHAT_ID" in bot.last

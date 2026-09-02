@@ -78,6 +78,7 @@ async def _post_init(application: Application) -> None:
             [
                 BotCommand("start", "Начать диалог"),
                 BotCommand("cancel", "Прервать диалог"),
+                BotCommand("id", "Показать ID этого чата"),
             ]
         )
     except TelegramError as exc:
