@@ -165,6 +165,40 @@ class SheetsExporter:
 
     # ------------------------------------------------------------------ #
 
+    def _open_spreadsheet(self) -> Any:
+        """Авторизация по ключу сервисного аккаунта и открытие таблицы."""
+        import gspread  # локальный импорт: без Sheets зависимость не нужна
+        from google.oauth2.service_account import Credentials
+
+        key_path = Path(self.config.credentials_file)
+        if not key_path.exists():
+            raise FileNotFoundError(
+                f"Файл ключа сервисного аккаунта не найден: {key_path.resolve()}"
+            )
+
+        creds = Credentials.from_service_account_file(str(key_path), scopes=SCOPES)
+        client = gspread.authorize(creds)
+        return client.open_by_key(self.config.spreadsheet_id)
+
+    def _open_worksheet(self, spreadsheet: Any) -> Any:
+        """Нужный лист таблицы: берём существующий, при отсутствии создаём."""
+        title = self.config.worksheet
+        try:
+            worksheet = spreadsheet.worksheet(title)
+        except Exception as exc:  # noqa: BLE001 — gspread.WorksheetNotFound и аналоги
+            if "worksheetnotfound" not in type(exc).__name__.lower() + str(exc).lower():
+                raise
+            worksheet = spreadsheet.add_worksheet(
+                title=title, rows=1000, cols=max(10, len(self.header()) + 2)
+            )
+            logger.info("В таблице создан лист '%s'", title)
+
+        # Шапку пишем только в пустой лист — существующие данные не трогаем
+        if self.config.write_header and not worksheet.get_all_values():
+            worksheet.append_row(self.header(), value_input_option="USER_ENTERED")
+            logger.info("В лист '%s' записана строка заголовков", title)
+        return worksheet
+
     def _get_worksheet(self) -> Any:
         """Ленивая авторизация и получение листа (выполняется в отдельном потоке)."""
         if self._worksheet is not None:
@@ -174,31 +208,7 @@ class SheetsExporter:
             if self._worksheet is not None:
                 return self._worksheet
 
-            import gspread  # локальный импорт: без Sheets зависимость не нужна
-            from google.oauth2.service_account import Credentials
-
-            key_path = Path(self.config.credentials_file)
-            if not key_path.exists():
-                raise FileNotFoundError(
-                    f"Файл ключа сервисного аккаунта не найден: {key_path.resolve()}"
-                )
-
-            creds = Credentials.from_service_account_file(str(key_path), scopes=SCOPES)
-            client = gspread.authorize(creds)
-            spreadsheet = client.open_by_key(self.config.spreadsheet_id)
-
-            try:
-                worksheet = spreadsheet.worksheet(self.config.worksheet)
-            except gspread.WorksheetNotFound:
-                worksheet = spreadsheet.add_worksheet(
-                    title=self.config.worksheet, rows=1000, cols=max(10, len(self.header()) + 2)
-                )
-                logger.info("В таблице создан лист '%s'", self.config.worksheet)
-
-            if self.config.write_header and not worksheet.get_all_values():
-                worksheet.append_row(self.header(), value_input_option="USER_ENTERED")
-                logger.info("В лист '%s' записана строка заголовков", self.config.worksheet)
-
+            worksheet = self._open_worksheet(self._open_spreadsheet())
             self._worksheet = worksheet
             logger.info(
                 "Google Sheets подключён: таблица %s, лист '%s'",

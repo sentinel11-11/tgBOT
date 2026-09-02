@@ -79,6 +79,7 @@ cd "C:\путь\до\tgBOT"
 py -m pip install --user -r requirements.txt
 
 py tools\configure.py                 # спросит токен, чат менеджера и ссылку на таблицу
+py tools\configure.py --worksheet "Лист1"   # писать в конкретный лист таблицы
 py tools\preflight.py                 # проверит, что всё настроено
 py -m bot                             # запуск
 ```

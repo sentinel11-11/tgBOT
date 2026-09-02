@@ -108,6 +108,9 @@ def main() -> int:
     parser.add_argument("--manager", help="ID чата менеджера")
     parser.add_argument("--sheet", help="ссылка на Google Таблицу или её ID")
     parser.add_argument("--name", help="имя, которым бот представляется в диалоге")
+    parser.add_argument(
+        "--worksheet", help="название листа в таблице (по умолчанию «Кандидаты»)"
+    )
     parser.add_argument("--no-input", action="store_true", help="ничего не спрашивать")
     args = parser.parse_args()
 
@@ -173,6 +176,7 @@ def main() -> int:
 
     # --- таблица ----------------------------------------------------------
     sheet_id = extract_sheet_id(args.sheet) if args.sheet else env.get("GOOGLE_SPREADSHEET_ID", "")
+    worksheet = args.worksheet or env.get("GOOGLE_WORKSHEET", "") or "Кандидаты"
     if interactive and not args.sheet:
         print("\n3. Google Таблица для отчётов")
         print("   Вставьте ссылку на таблицу целиком или её ID (Enter — пропустить).")
@@ -207,6 +211,7 @@ def main() -> int:
         f"GOOGLE_SHEETS_ENABLED={'true' if sheets_enabled else 'false'}",
         "GOOGLE_CREDENTIALS_FILE=credentials.json",
         f"GOOGLE_SPREADSHEET_ID={sheet_id}",
+        f"GOOGLE_WORKSHEET={worksheet}",
         "",
         "# Прокси, если Telegram недоступен напрямую",
         "# PROXY_URL=socks5://127.0.0.1:1082",
@@ -222,6 +227,7 @@ def main() -> int:
     print(f"  Токен:            задан ({token[:12]}...)")
     print(f"  Чат менеджера:    {manager or 'НЕ ЗАДАН — узнайте через /id'}")
     print(f"  Таблица:          {sheet_id or 'НЕ ЗАДАНА'}")
+    print(f"  Лист:             {worksheet}")
     print(f"  Ключ Google:      {'credentials.json' if CREDENTIALS.exists() else 'НЕ НАЙДЕН'}")
     print(f"  Выгрузка в Sheets:{' включена' if sheets_enabled else ' выключена'}")
 

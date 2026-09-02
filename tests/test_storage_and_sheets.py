@@ -225,3 +225,88 @@ async def test_append_does_not_retry_permission_error(config, monkeypatch):
     assert await exporter.append(answers=ANSWERS, username="@ivanov", user_id=42) is False
     assert len(calls) == 1
     assert "Редактор" in exporter.last_error
+
+
+# --------------------------------------------------------------------------- #
+#  Выбор листа в таблице
+# --------------------------------------------------------------------------- #
+
+class WorksheetNotFound(Exception):
+    """Имя класса важно: bot.sheets опознаёт её как «листа нет»."""
+
+
+class FakeWorksheet:
+    def __init__(self, title, values=None):
+        self.title = title
+        self.values = list(values or [])
+
+    def get_all_values(self):
+        return self.values
+
+    def append_row(self, row, value_input_option=None):
+        self.values.append(row)
+
+
+class FakeSpreadsheet:
+    """Имитация таблицы: есть «Лист1», листа «Кандидаты» нет."""
+
+    def __init__(self, sheets):
+        self.sheets = {ws.title: ws for ws in sheets}
+        self.created = []
+
+    def worksheet(self, title):
+        if title not in self.sheets:
+            raise WorksheetNotFound(f"лист {title} не найден")
+        return self.sheets[title]
+
+    def add_worksheet(self, title, rows, cols):
+        worksheet = FakeWorksheet(title)
+        self.sheets[title] = worksheet
+        self.created.append(title)
+        return worksheet
+
+
+def _exporter_with(config, spreadsheet, worksheet_name):
+    config.sheets.enabled = True
+    config.sheets.spreadsheet_id = "fake"
+    config.sheets.worksheet = worksheet_name
+    return SheetsExporter(config.sheets, config.survey)
+
+
+def test_uses_existing_sheet_and_does_not_duplicate_header(config, monkeypatch):
+    """Лист1 уже с шапкой и данными — пишем следом, шапку не дублируем."""
+    header = ["Дата и время", "ФИО"]
+    existing = FakeWorksheet("Лист1", values=[header, ["01.01.2026", "Иванов"]])
+    spreadsheet = FakeSpreadsheet([existing])
+
+    exporter = _exporter_with(config, spreadsheet, "Лист1")
+    monkeypatch.setattr(exporter, "_open_spreadsheet", lambda: spreadsheet, raising=False)
+
+    worksheet = exporter._get_worksheet()
+    assert worksheet is existing
+    assert spreadsheet.created == [], "существующий лист не должен пересоздаваться"
+    assert worksheet.values[0] == header, "шапка осталась одна"
+
+
+def test_writes_header_into_empty_sheet(config, monkeypatch):
+    """Пустой Лист1 — бот сам проставит заголовки колонок."""
+    empty = FakeWorksheet("Лист1")
+    spreadsheet = FakeSpreadsheet([empty])
+
+    exporter = _exporter_with(config, spreadsheet, "Лист1")
+    monkeypatch.setattr(exporter, "_open_spreadsheet", lambda: spreadsheet, raising=False)
+
+    exporter._get_worksheet()
+    assert empty.values[0] == exporter.header()
+
+
+def test_creates_sheet_when_missing(config, monkeypatch):
+    """Если нужного листа нет — он создаётся, остальные не трогаются."""
+    spreadsheet = FakeSpreadsheet([FakeWorksheet("Лист1", values=[["чужие данные"]])])
+
+    exporter = _exporter_with(config, spreadsheet, "Кандидаты")
+    monkeypatch.setattr(exporter, "_open_spreadsheet", lambda: spreadsheet, raising=False)
+
+    exporter._get_worksheet()
+    assert spreadsheet.created == ["Кандидаты"]
+    assert spreadsheet.sheets["Лист1"].values == [["чужие данные"]]
