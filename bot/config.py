@@ -223,6 +223,8 @@ class Config:
 
     token: str
     bot_name: str = "Консультант"
+    #: Куда слать карточки кандидатов. Можно перечислить несколько получателей
+    #: через запятую: "123456789, -1001234567890, @channel_name".
     manager_chat_id: str | None = None
     proxy: str | None = None
     emoji: bool = True
@@ -241,6 +243,13 @@ class Config:
     manager_notification: str = ""
 
     # ------------------------------------------------------------------ #
+
+    @property
+    def manager_chat_ids(self) -> list[str]:
+        """Список получателей карточек: MANAGER_CHAT_ID может содержать несколько
+        адресатов через запятую (личный чат, группа, канал)."""
+        raw = self.manager_chat_id or ""
+        return [part.strip() for part in raw.replace(";", ",").split(",") if part.strip()]
 
     def message(self, key: str) -> list[str]:
         """Варианты общего сообщения по ключу."""

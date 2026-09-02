@@ -320,8 +320,8 @@ class SurveyBot:
         self, update: Update, context: ContextTypes.DEFAULT_TYPE, answers: dict[str, Any]
     ) -> None:
         """Шлёт карточку кандидата в чат менеджера. Ошибка не прерывает диалог."""
-        chat_id = self.config.manager_chat_id
-        if not chat_id:
+        recipients = self.config.manager_chat_ids
+        if not recipients:
             logger.warning(
                 "manager_chat_id не задан — уведомление о кандидате не отправлено "
                 "(укажите MANAGER_CHAT_ID или bot.manager_chat_id в конфиге)"
@@ -345,18 +345,27 @@ class SurveyBot:
             self.config.manager_notification, values, emoji=self.config.emoji
         )
 
-        target: str | int = chat_id
-        if isinstance(chat_id, str) and not chat_id.startswith("@"):
-            try:
-                target = int(chat_id)
-            except ValueError:
-                target = chat_id
+        for chat_id in recipients:
+            target: str | int = chat_id
+            if not chat_id.startswith("@"):
+                try:
+                    target = int(chat_id)
+                except ValueError:
+                    target = chat_id
 
-        try:
-            await context.bot.send_message(chat_id=target, text=text)
-            logger.info("Уведомление о кандидате %s отправлено менеджеру", getattr(user, "id", "?"))
-        except TelegramError as exc:
-            logger.error("Не удалось отправить уведомление менеджеру (%s): %s", target, exc)
+            try:
+                await context.bot.send_message(chat_id=target, text=text)
+                logger.info(
+                    "Уведомление о кандидате %s отправлено менеджеру %s",
+                    getattr(user, "id", "?"), target,
+                )
+            except TelegramError as exc:
+                # Частая причина: менеджер не нажал /start у бота
+                logger.error(
+                    "Не удалось отправить уведомление менеджеру (%s): %s. "
+                    "Проверьте, что получатель начинал диалог с ботом "
+                    "(или бот добавлен в группу)", target, exc,
+                )
 
     # ------------------------------------------------------------------ #
     #  Команды
@@ -402,8 +411,8 @@ class SurveyBot:
     async def cmd_stats(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Количество сохранённых анкет. Доступно только чату менеджера."""
         chat = update.effective_chat
-        manager = self.config.manager_chat_id
-        if not manager or not chat or str(chat.id) != str(manager):
+        managers = self.config.manager_chat_ids
+        if not managers or not chat or str(chat.id) not in managers:
             return
         total = await self.storage.count() if self.storage else 0
         await self.reply(update, context, f"Всего анкет в базе: {total}")

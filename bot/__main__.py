@@ -87,7 +87,7 @@ async def _post_init(application: Application) -> None:
     if sheets is not None and sheets.enabled:
         await sheets.check_connection()
 
-    if not survey.config.manager_chat_id:
+    if not survey.config.manager_chat_ids:
         logger.warning("manager_chat_id не задан: уведомления менеджеру отправляться не будут")
 
 
