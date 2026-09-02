@@ -22,6 +22,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+if sys.platform == "win32":  # корректный вывод кириллицы в PowerShell
+    for _stream in (sys.stdout, sys.stderr):
+        try:
+            _stream.reconfigure(encoding="utf-8")
+        except (AttributeError, ValueError):  # pragma: no cover
+            pass
+
+
 from bot.config import Config, ConfigError, load_config  # noqa: E402
 from bot.sheets import SheetsExporter  # noqa: E402
 from bot.storage import CandidateStorage  # noqa: E402

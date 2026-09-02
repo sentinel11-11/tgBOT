@@ -6,6 +6,10 @@ credentials.json
 *credentials*.json
 service_account*.json
 
+# Любой JSON в корне проекта: ключи сервисных аккаунтов Google скачиваются
+# со случайными именами вида luminous-bond-501914-e9-1cd69c392d6a.json
+/*.json
+
 # --- Данные ---
 data/
 *.db

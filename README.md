@@ -30,16 +30,16 @@
 
 ## Быстрый старт
 
+### Linux / macOS
+
 ```bash
 git clone <repo> && cd tgBOT
 
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
-cp config.example.yaml config.yaml     # сценарий и тексты
-cp .env.example .env                   # секреты
-
-# в .env укажите BOT_TOKEN (от @BotFather) и MANAGER_CHAT_ID
+python tools/configure.py              # создаст config.yaml и .env
+# (или вручную: cp config.example.yaml config.yaml && cp .env.example .env)
 python tools/preflight.py              # проверка: токен, менеджер, таблица, база
 python -m bot
 ```
@@ -65,6 +65,30 @@ python -m bot
 ```
 
 Требуется Python 3.11+.
+
+### Windows (PowerShell)
+
+`.env`, `config.yaml` и `credentials.json` не хранятся в репозитории, поэтому
+в свежераспакованном проекте их нет — их создаёт `configure.py`:
+
+```powershell
+cd "C:\путь\до\tgBOT"
+
+py -3 -m venv .venv
+.\.venv\Scripts\Activate.ps1          # если ругается на политику выполнения:
+                                       # Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+pip install -r requirements.txt
+
+py tools\configure.py                  # спросит токен, чат менеджера и ссылку на таблицу
+py tools\preflight.py                  # проверит, что всё настроено
+py -m bot                              # запуск
+```
+
+`configure.py` сам найдёт JSON-ключ сервисного аккаунта в папке проекта,
+в «Загрузках» или на «Рабочем столе», скопирует его в `credentials.json`
+и напечатает адрес сервисного аккаунта, которому нужно открыть доступ к таблице.
+
+Остановить бота — `Ctrl+C`.
 
 ### Команды бота
 
@@ -404,6 +428,7 @@ tgBOT/
 │   ├── sheets.py          выгрузка в Google Sheets
 │   └── logging_setup.py   логирование в консоль и файл
 ├── tools/
+│   ├── configure.py       первичная настройка: создаёт config.yaml и .env
 │   ├── preflight.py       проверка токена, менеджера, таблицы и базы
 │   ├── simulate.py        прогон диалога в терминале
 │   └── create_sheet.py    создание Google Таблицы под текущий сценарий
@@ -428,5 +453,6 @@ tgBOT/
 | `manager_chat_id не задан` | Уведомления выключены — задайте `MANAGER_CHAT_ID` |
 | В таблицу ничего не пишется | Запустите `python tools/preflight.py` — он назовёт причину |
 | `Не удалось создать таблицу` | В Google Cloud не включены Sheets API и Drive API |
-| `Файл ключа сервисного аккаунта не найден` | Неверный путь в `google_sheets.credentials_file` |
+| `Файл ключа сервисного аккаунта не найден` | Положите JSON в папку проекта и запустите `python tools/configure.py` |
+| `The caller does not have permission` | Таблице не открыт доступ для сервисного аккаунта (`python tools/create_sheet.py --whoami` покажет адрес) |
 | Бот молчит на кнопки | Диалог завершён — отправьте `/start` |

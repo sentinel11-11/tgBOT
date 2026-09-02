@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import logging.handlers
+import sys
 from pathlib import Path
 
 LOG_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
@@ -11,6 +12,13 @@ LOG_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 
 def setup_logging(level: str = "INFO", log_file: str | None = None) -> None:
     """Настраивает корневой логгер. Формат: время - имя - уровень - сообщение."""
+    if sys.platform == "win32":  # чтобы кириллица не ломала вывод в консоли Windows
+        for stream in (sys.stdout, sys.stderr):
+            try:
+                stream.reconfigure(encoding="utf-8")
+            except (AttributeError, ValueError):  # pragma: no cover
+                pass
+
     root = logging.getLogger()
     root.setLevel(getattr(logging, str(level).upper(), logging.INFO))
 
