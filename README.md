@@ -121,20 +121,42 @@ py -m bot                             # запуск
 останутся на месте (их нет в репозитории). В конце он покажет, какие из этих
 файлов найдены.
 
-Если предпочитаете вручную:
+### Перейти на git (рекомендуется)
+
+Если проект распакован из ZIP, его можно превратить в git-копию **прямо на месте** —
+локальные `.env`, `config.yaml`, `credentials.json` и база `data\` при этом сохранятся
+(их нет в репозитории, git их не трогает):
 
 ```powershell
-# Вариант с git (один раз клонировать, дальше — git pull)
-git clone -b arena/01a0625e-tgbot https://github.com/sentinel11-11/tgBOT.git tgBOT
-cd tgBOT
-git pull
+cd "C:\путь\до\проекта"
 
-# Вариант без git: скачать ZIP ветки и распаковать поверх
-Invoke-WebRequest "https://github.com/sentinel11-11/tgBOT/archive/refs/heads/arena/01a0625e-tgbot.zip" -OutFile "$env:TEMP\tgbot.zip"
-Expand-Archive "$env:TEMP\tgbot.zip" -DestinationPath "$env:TEMP\tgbot-src" -Force
-Copy-Item "$env:TEMP\tgbot-src\tgBOT-arena-01a0625e-tgbot\*" -Destination . -Recurse -Force
-py -m pip install --user -r requirements.txt
+git init
+git remote add origin https://github.com/sentinel11-11/tgBOT.git
+git fetch origin arena/01a0625e-tgbot
+git reset --hard FETCH_HEAD
+git branch -M arena/01a0625e-tgbot
+git branch --set-upstream-to=origin/arena/01a0625e-tgbot
 ```
+
+После этого обновление — одна команда (или кнопка Sync в VS Code):
+
+```powershell
+git pull
+```
+
+> `git reset --hard` заменяет файлы кода версией из репозитория. Если вы правили
+> сам код (не конфиги), сначала сохраните копию — эти правки будут перезаписаны.
+
+Нет git? Поставьте: `winget install --id Git.Git -e` или с [git-scm.com](https://git-scm.com/download/win).
+
+### Обновление без git
+
+```powershell
+.\tools\update.ps1
+```
+
+Скрипт скачает свежий ZIP ветки, заменит код, обновит зависимости и покажет
+номер последнего коммита. Настройки и база сохраняются.
 
 ## Конфигурация
 
