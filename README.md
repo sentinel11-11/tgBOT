@@ -531,61 +531,82 @@ docker run -d --name tgbot --restart unless-stopped \
 
 ## VPN на сервере (если Telegram заблокирован)
 
-Если с сервера не открывается `api.telegram.org`, не нужно заворачивать в VPN
-весь сервер: это заденет соседние сервисы и легко приводит к потере SSH.
-Вместо этого поднимается локальный SOCKS5-прокси, и через него ходит
-**только наш бот**.
+Схема такая же, как у остальных ваших ботов, но **полностью изолированная**:
+
+```
+Бот  ──socks5://127.0.0.1:1082──▶  Xray (свой экземпляр)  ──VLESS+REALITY──▶  Telegram
+```
+
+1. **Свой экземпляр Xray** — отдельный конфиг `/usr/local/etc/xray/axiom-bot.json`
+   и отдельный сервис `xray-axiom-bot.service`. Существующий `xray.service`
+   и его `config.json` (через которые работают другие боты) **не трогаются**.
+2. **Локальный SOCKS5** на `127.0.0.1:1082` — наружу не торчит, системная
+   маршрутизация не меняется, SSH и соседние сервисы не затронуты.
+3. **Бот** ходит через прокси: `PROXY_URL=socks5://127.0.0.1:1082` в `.env`.
+
+### Установка
 
 ```bash
-# на сервере, из папки проекта
+cd /opt/axiom-bot
 sudo bash deploy/vpn_setup.sh 'https://ваша-ссылка-подписки'
 ```
 
-Скрипт сам:
+Скрипт: поставит Xray (если его ещё нет), создаст системного пользователя
+`xray-axiom-bot`, разберёт подписку, сгенерирует конфиг, поднимет сервис,
+проверит через прокси доступ к `api.telegram.org` — **перебрав серверы
+подписки, пока не найдёт рабочий**, — пропишет `PROXY_URL` в `.env`
+и перезапустит бота.
 
-1. поставит Xray-core (если ещё нет);
-2. прочитает подписку и покажет список серверов;
-3. сгенерирует конфиг: SOCKS5 на `127.0.0.1:1081`, наружу — выбранный сервер;
-4. проверит через прокси доступ к `api.telegram.org`, **перебрав серверы**,
-   пока не найдёт рабочий;
-5. пропишет `PROXY_URL=socks5://127.0.0.1:1081` в `.env` бота и перезапустит его.
+Порт по умолчанию 1082 (1080/1081 обычно уже заняты соседними прокси).
+Если порт занят, скрипт остановится и предложит другой.
 
-Локальные адреса (`geoip:private`) маршрутизируются мимо VPN, а SOCKS5 слушает
-только `127.0.0.1` — снаружи прокси недоступен, SSH и соседние боты не затронуты.
-
-### Выбор сервера
+### Ключи
 
 ```bash
-sudo bash deploy/vpn_setup.sh '<ссылка>' --list          # какие серверы есть
-sudo bash deploy/vpn_setup.sh '<ссылка>' --node 2        # взять третий
-sudo bash deploy/vpn_setup.sh '<ссылка>' --name Nether   # по названию
+sudo bash deploy/vpn_setup.sh '<ссылка>' --list          # список серверов подписки
+sudo bash deploy/vpn_setup.sh '<ссылка>' --node 2        # взять третий сервер
+sudo bash deploy/vpn_setup.sh '<ссылка>' --name Nether   # выбрать по названию
 sudo bash deploy/vpn_setup.sh '<ссылка>' --port 1085     # другой порт
+sudo bash deploy/vpn_setup.sh --reuse                    # взять уже работающий чужой прокси
+bash deploy/vpn_setup.sh '<ссылка>' --dry-run            # только показать, ничего не менять
 ```
 
 Поддерживаются подписки со ссылками `vless://` (включая Reality), `vmess://`,
-`trojan://` и `ss://`, в base64 и обычным текстом.
+`trojan://` и `ss://` — в base64 и обычным текстом.
 
 ### Проверка и управление
 
 ```bash
-systemctl status xray
-curl --socks5-hostname 127.0.0.1:1081 -I https://api.telegram.org    # должен быть ответ
-cd /opt/axiom-bot && .venv/bin/python tools/preflight.py             # проверка бота
+systemctl status xray-axiom-bot                                       # прокси бота
+curl --socks5-hostname 127.0.0.1:1082 -I https://api.telegram.org      # доступ есть?
+cd /opt/axiom-bot && .venv/bin/python tools/preflight.py               # проверка бота
+journalctl -u xray-axiom-bot -f                                        # логи прокси
 ```
 
-Прокси можно задать и вручную — в `.env` бота или в `config.yaml`:
+Прокси можно задать и вручную — в `.env` бота:
+
+```
+PROXY_URL=socks5://127.0.0.1:1082
+```
+
+или в `config.yaml`:
 
 ```yaml
 bot:
-  proxy: "socks5://127.0.0.1:1081"
+  proxy: "socks5://127.0.0.1:1082"
 ```
 
-Только сгенерировать конфиг, ничего не устанавливая:
+### Если прокси уже есть
+
+Когда на сервере уже крутится Xray с SOCKS5 (например, для других ботов),
+второй экземпляр не нужен — достаточно указать его порт:
 
 ```bash
-python3 tools/vpn_proxy.py --subscription '<ссылка>' --list
-bash deploy/vpn_setup.sh '<ссылка>' --dry-run
+sudo bash deploy/vpn_setup.sh --reuse            # найдёт рабочий порт сам
+sudo bash deploy/vpn_setup.sh --reuse --port 1080
 ```
+
+Скрипт проверит порт, пропишет его боту и ничего не установит.
 
 ## Структура проекта
 
@@ -611,7 +632,8 @@ tgBOT/
 ├── tests/                 pytest: конфиг, валидация, полный диалог, БД, Sheets
 ├── deploy/
 │   ├── install.sh         установка на сервер (systemd, venv, автозапуск)
-│   ├── vpn_setup.sh       локальный SOCKS5 через VPN-подписку (Xray)
+│   ├── vpn_setup.sh       отдельный SOCKS5-прокси для бота (свой Xray)
+│   └── xray-instance.service.template  systemd-юнит прокси
 │   ├── deploy.ps1         загрузка на сервер по SSH из Windows
 │   └── tgbot.service.template  шаблон systemd-юнита
 ├── config.example.yaml    шаблон конфига (весь сценарий и тексты)
