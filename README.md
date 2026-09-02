@@ -493,7 +493,7 @@ tar -czf $env:TEMP\axiom-bot.tar.gz --exclude="__pycache__" `
 
 scp -P 22 $env:TEMP\axiom-bot.tar.gz root@ВАШ_СЕРВЕР:/tmp/
 
-ssh -p 22 root@ВАШ_СЕРВЕР "mkdir -p /tmp/axiom-src && tar -xzf /tmp/axiom-bot.tar.gz -C /tmp/axiom-src && cd /tmp/axiom-src && APP_NAME=axiom-bot bash deploy/install.sh && rm -rf /tmp/axiom-src /tmp/axiom-bot.tar.gz"
+ssh -p 22 root@ВАШ_СЕРВЕР "mkdir -p /tmp/axiom-src && tar -xzf /tmp/axiom-bot.tar.gz -C /tmp/axiom-src && cd /tmp/axiom-src && find deploy -name '*.sh' -exec sed -i 's/\r$//' {} + && APP_NAME=axiom-bot bash deploy/install.sh && rm -rf /tmp/axiom-src /tmp/axiom-bot.tar.gz"
 ```
 
 `install.sh` проверит Python, создаст пользователя `axiom-bot`, каталог
@@ -703,5 +703,7 @@ tgBOT/
 | Бот молчит на кнопки | Диалог завершён — отправьте `/start` |
 | `Политика управления приложениями заблокировала этот файл` | Windows блокирует `pip.exe` из `.venv`. Работайте без venv: `py -m pip install --user -r requirements.txt`, запуск — `py -m bot` |
 | `can't open file ...configure.py\` | Лишний обратный слэш в конце команды: нужно `py tools\configure.py` |
+| `set: pipefail\r: invalid option name` на сервере | Скрипты уехали с CRLF. Обновитесь (`git pull`) — `.gitattributes` это чинит |
+| `.ps1` ругается «Отсутствует закрывающий знак» и кракозябры | Старая версия скрипта без BOM — обновитесь через `git pull` |
 | `Conflict: terminated by other getUpdates` | Тот же токен запущен второй раз — остановите лишнюю копию |
 | На сервере `Failed to start` | `journalctl -u axiom-bot -n 30` покажет причину; чаще всего пустой `BOT_TOKEN` в `/opt/axiom-bot/.env` |

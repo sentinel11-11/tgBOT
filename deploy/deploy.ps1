@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Загрузка бота на Linux-сервер и установка его как systemd-сервиса.
 
@@ -80,6 +80,8 @@ rm -rf /tmp/$AppName-src
 mkdir -p /tmp/$AppName-src
 tar -xzf /tmp/$AppName-deploy.tar.gz -C /tmp/$AppName-src
 cd /tmp/$AppName-src
+# Если локальный Git отдал скрипты с CRLF — bash их не выполнит, снимаем \r
+find deploy -name '*.sh' -exec sed -i 's/\r$//' {} + 2>/dev/null || true
 APP_NAME=$AppName bash deploy/install.sh
 rm -rf /tmp/$AppName-src /tmp/$AppName-deploy.tar.gz
 "@

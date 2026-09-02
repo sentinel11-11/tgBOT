@@ -1,0 +1,23 @@
+# Переводы строк фиксируем явно: иначе Git for Windows (core.autocrlf=true)
+# отдаёт shell-скрипты с CRLF, и на сервере bash падает с
+# "set: pipefail\r: invalid option name".
+
+* text=auto eol=lf
+
+# Скрипты Linux — строго LF, они уезжают на сервер как есть
+*.sh      text eol=lf
+*.service text eol=lf
+*.yaml    text eol=lf
+*.yml     text eol=lf
+*.py      text eol=lf
+
+# Скрипты Windows — CRLF, так их ждёт PowerShell
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Двоичное не трогаем
+*.db   binary
+*.png  binary
+*.jpg  binary
+*.gz   binary
