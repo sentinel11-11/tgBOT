@@ -1,0 +1,10 @@
+# Ядро бота (long polling, ConversationHandler, JobQueue)
+python-telegram-bot[socks]==21.6
+
+# Конфигурация
+PyYAML==6.0.2
+python-dotenv==1.0.1
+
+# Выгрузка анкет в Google Sheets (опционально, см. google_sheets.enabled в конфиге)
+gspread==6.1.2
+google-auth==2.35.0

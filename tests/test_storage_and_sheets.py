@@ -1,0 +1,133 @@
+"""Тесты хранилища и подготовки строк для Google Sheets."""
+
+from __future__ import annotations
+
+import sqlite3
+
+import pytest
+
+from bot.sheets import SheetsExporter
+from bot.storage import CandidateStorage
+
+# asyncio_mode=auto (pytest.ini): async-тесты подхватываются автоматически
+
+ANSWERS = {
+    "interest": "Да",
+    "full_name": "Иванов Иван Иванович",
+    "age": 35,
+    "health": "Нет проблем",
+    "crime": "Нет судимостей",
+}
+
+
+# --------------------------------------------------------------------------- #
+#  SQLite
+# --------------------------------------------------------------------------- #
+
+async def test_storage_saves_candidate(config, tmp_path):
+    storage = CandidateStorage(str(tmp_path / "db.sqlite"), config.survey)
+    storage.init()
+
+    row_id = await storage.save(
+        user_id=42, username="@ivanov", first_name="Иван", answers=ANSWERS, status="completed"
+    )
+    assert row_id == 1
+    assert await storage.count() == 1
+
+    with sqlite3.connect(tmp_path / "db.sqlite") as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute("SELECT * FROM candidates").fetchone()
+
+    assert row["full_name"] == "Иванов Иван Иванович"
+    assert row["age"] == "35"
+    assert row["health"] == "Нет проблем"
+    assert row["crime"] == "Нет судимостей"
+    assert row["username"] == "@ivanov"
+    assert row["status"] == "completed"
+    assert row["created_at"]
+
+
+async def test_storage_adds_column_for_new_step(config, tmp_path):
+    """Новый шаг в конфиге -> новая колонка, старые данные на месте."""
+    db_path = str(tmp_path / "db.sqlite")
+    storage = CandidateStorage(db_path, config.survey)
+    storage.init()
+    await storage.save(user_id=1, username=None, first_name=None, answers=ANSWERS)
+
+    from bot.config import Step
+
+    extended = list(config.survey) + [
+        Step.from_dict({"key": "license", "type": "yes_no", "label": "Права", "questions": ["?"]}, 9)
+    ]
+    storage2 = CandidateStorage(db_path, extended)
+    storage2.init()
+    await storage2.save(
+        user_id=2, username=None, first_name=None, answers={**ANSWERS, "license": "Есть"}
+    )
+
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute("SELECT * FROM candidates ORDER BY id").fetchall()
+
+    assert len(rows) == 2
+    assert rows[0]["license"] is None
+    assert rows[1]["license"] == "Есть"
+
+
+async def test_storage_disabled_is_noop(config, tmp_path):
+    storage = CandidateStorage(str(tmp_path / "none.db"), config.survey, enabled=False)
+    storage.init()
+    assert await storage.save(user_id=1, username=None, first_name=None, answers=ANSWERS) is None
+    assert await storage.count() == 0
+
+
+# --------------------------------------------------------------------------- #
+#  Google Sheets
+# --------------------------------------------------------------------------- #
+
+def test_sheets_header_follows_config(config):
+    exporter = SheetsExporter(config.sheets, config.survey)
+    assert exporter.header() == [
+        "Дата и время", "ФИО", "Возраст", "Здоровье", "Судимости",
+        "Телеграм", "User ID", "Статус",
+    ]
+
+
+def test_sheets_row_matches_header(config):
+    from datetime import datetime
+
+    exporter = SheetsExporter(config.sheets, config.survey)
+    row = exporter.row(
+        answers=ANSWERS,
+        username="@ivanov",
+        user_id=42,
+        status="Прошёл отбор",
+        created_at=datetime(2026, 9, 2, 15, 30, 45),
+    )
+    assert len(row) == len(exporter.header())
+    assert row == [
+        "02.09.2026 15:30:45", "Иванов Иван Иванович", "35",
+        "Нет проблем", "Нет судимостей", "@ivanov", "42", "Прошёл отбор",
+    ]
+
+
+async def test_sheets_disabled_returns_false(config):
+    config.sheets.enabled = False
+    exporter = SheetsExporter(config.sheets, config.survey)
+    assert await exporter.append(answers=ANSWERS, username="@ivanov", user_id=42) is False
+
+
+async def test_sheets_error_is_swallowed(config, monkeypatch, caplog):
+    """Падение Google Sheets не должно ронять диалог."""
+    config.sheets.enabled = True
+    config.sheets.spreadsheet_id = "fake"
+    exporter = SheetsExporter(config.sheets, config.survey)
+
+    def boom(row):
+        raise RuntimeError("API quota exceeded")
+
+    monkeypatch.setattr(exporter, "_append_sync", boom)
+
+    result = await exporter.append(answers=ANSWERS, username="@ivanov", user_id=42)
+    assert result is False
+    assert "Google Sheets" in caplog.text
