@@ -65,6 +65,16 @@ UNIT_PATH="/etc/systemd/system/${XRAY_SERVICE}.service"
 
 command -v python3 >/dev/null 2>&1 || die "Нужен python3: apt install python3"
 
+# curl нужен для проверки доступа к Telegram через прокси
+if ! command -v curl >/dev/null 2>&1; then
+    if [ "$(id -u)" -eq 0 ] && command -v apt-get >/dev/null 2>&1; then
+        info "Ставлю curl"
+        apt-get update -qq && apt-get install -y -qq curl ca-certificates >/dev/null
+    else
+        die "Нужен curl: apt install curl"
+    fi
+fi
+
 # --------------------------------------------------------------------------- #
 #  Вспомогательное
 # --------------------------------------------------------------------------- #
