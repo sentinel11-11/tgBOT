@@ -80,6 +80,7 @@ py -m pip install --user -r requirements.txt
 
 py tools\configure.py                 # спросит токен, чат менеджера и ссылку на таблицу
 py tools\configure.py --worksheet "Лист1"   # писать в конкретный лист таблицы
+py tools\configure.py --reset-config        # обновить сценарий из шаблона после git pull
 py tools\preflight.py                 # проверит, что всё настроено
 py -m bot                             # запуск
 ```

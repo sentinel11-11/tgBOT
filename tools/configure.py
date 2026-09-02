@@ -20,6 +20,7 @@ import json
 import re
 import shutil
 import sys
+from datetime import datetime
 from pathlib import Path
 
 if sys.platform == "win32":  # корректный вывод кириллицы в PowerShell
@@ -111,6 +112,11 @@ def main() -> int:
     parser.add_argument(
         "--worksheet", help="название листа в таблице (по умолчанию «Кандидаты»)"
     )
+    parser.add_argument(
+        "--reset-config",
+        action="store_true",
+        help="пересоздать config.yaml из шаблона (старый сохранится рядом с датой)",
+    )
     parser.add_argument("--no-input", action="store_true", help="ничего не спрашивать")
     args = parser.parse_args()
 
@@ -119,6 +125,13 @@ def main() -> int:
     print("=" * 62)
 
     # --- config.yaml ------------------------------------------------------
+    # --reset-config: забираем свежий сценарий из шаблона, старый сохраняем
+    if args.reset_config and CONFIG.exists():
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        backup = CONFIG.with_name(f"config.yaml.{stamp}.bak")
+        CONFIG.replace(backup)
+        print(f"\nСтарый config.yaml сохранён: {backup.name}")
+
     if CONFIG.exists():
         print(f"\nconfig.yaml уже есть — оставляю как есть ({CONFIG}).")
     elif CONFIG_EXAMPLE.exists():

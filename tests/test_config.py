@@ -177,3 +177,17 @@ def test_bad_ask_if_is_rejected(tmp_path, monkeypatch):
     )
     with pytest.raises(ConfigError, match="ask_if"):
         load_config(str(path))
+
+
+def test_missing_config_names_the_file(tmp_path, monkeypatch):
+    """Отсутствующий config.yaml объясняется прямо, а не «нет шагов опроса»."""
+    monkeypatch.setenv("BOT_TOKEN", VALID_TOKEN)
+    missing = tmp_path / "config.yaml"
+
+    with pytest.raises(ConfigError) as error:
+        load_config(str(missing))
+
+    text = str(error.value)
+    assert "не найден" in text
+    assert "config.yaml" in text
+    assert "configure.py" in text, "подсказано, как создать"

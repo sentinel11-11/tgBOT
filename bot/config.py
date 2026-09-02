@@ -419,10 +419,14 @@ def load_config(path: str | Path | None = None) -> Config:
         if not isinstance(loaded, dict):
             raise ConfigError(f"{config_path}: ожидался словарь на верхнем уровне")
         raw = loaded
-    elif not os.getenv("BOT_TOKEN"):
+    else:
+        # Без файла сценария бот бесполезен: раньше это выглядело как загадочное
+        # «не описан ни один шаг опроса», хотя причина — отсутствующий файл.
         raise ConfigError(
-            f"Файл конфигурации '{config_path}' не найден и переменная BOT_TOKEN не задана.\n"
-            "Скопируйте шаблон:  cp config.example.yaml config.yaml"
+            f"Файл конфигурации '{config_path.resolve()}' не найден.\n"
+            "Создайте его одной из команд:\n"
+            "    python tools/configure.py        (спросит токен и настройки)\n"
+            "    cp config.example.yaml config.yaml"
         )
 
     bot_section = raw.get("bot") or {}
