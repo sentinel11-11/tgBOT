@@ -191,3 +191,20 @@ def test_missing_config_names_the_file(tmp_path, monkeypatch):
     assert "не найден" in text
     assert "config.yaml" in text
     assert "configure.py" in text, "подсказано, как создать"
+
+
+@pytest.mark.parametrize("value,expected", [
+    ("1216829906", True),
+    ("-1001234567890", True),
+    ("@hr_channel", True),
+    ("1216829906, -1001234567890", True),
+    ("-", False),
+    ("абв", False),
+    ("", False),
+    ("12", False),
+])
+def test_manager_id_validation(value, expected):
+    """Опечатка в ID менеджера ловится при настройке, а не в бою."""
+    from tools.configure import valid_chat_ids
+
+    assert valid_chat_ids(value) is expected

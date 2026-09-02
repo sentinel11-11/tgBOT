@@ -103,6 +103,15 @@ def service_account_email(path: Path) -> str:
 # --------------------------------------------------------------------------- #
 
 
+def valid_chat_ids(value: str) -> bool:
+    """Проверяет ID получателей: число, -100… для группы или @имя канала."""
+    parts = [part.strip() for part in value.replace(";", ",").split(",") if part.strip()]
+    if not parts:
+        return False
+    pattern = re.compile(r"(-?\d{5,})|(@[A-Za-z][A-Za-z0-9_]{3,})")
+    return all(pattern.fullmatch(part) for part in parts)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Первичная настройка бота")
     parser.add_argument("--token", help="токен от @BotFather")
@@ -186,6 +195,16 @@ def main() -> int:
         print("   Можно пропустить (Enter): запустите бота, напишите ему /id,")
         print("   он ответит числом — и запустите этот скрипт ещё раз.")
         manager = ask("   ID чата менеджера", manager)
+
+    # Опечатка вроде «-» тихо ломает уведомления, поэтому проверяем сразу
+    if manager and not valid_chat_ids(manager):
+        print(
+            f"   Значение «{manager}» не похоже на ID чата — пропускаю.\n"
+            "   Нужно число (например 1216829906), для группы со знаком минус\n"
+            "   (-1001234567890) или @имя_канала. Узнать: команда /id в чате с ботом.",
+            file=sys.stderr,
+        )
+        manager = ""
 
     # --- таблица ----------------------------------------------------------
     sheet_id = extract_sheet_id(args.sheet) if args.sheet else env.get("GOOGLE_SPREADSHEET_ID", "")
